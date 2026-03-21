@@ -157,10 +157,8 @@ Source: msi-ec BeardOverflow + personal EC RW-Everything dump.
 | `0xF4` | `0x0D`=auto / `0x1D`=silent / `0x8D`=advanced | Mode fan |
 | `0x98` bit 7 | `0x80`=ON / `0x00`=OFF (masque bit 7) | Cooler Boost (fans 100%) |
 
-> **Cooler Boost :** toujours lire `0x98`, masquer le bit 7, réécrire. Les autres bits
-> contiennent des valeurs firmware persistantes (`0x02`/`0x03`/`0x05` observés dans les dumps).
-
-### Lecture temps réel
+> **Cooler Boost:** always read `0x98`, mask bit 7, then write back. The other bits
+> contain persistent firmware values (`0x02`/`0x03`/`0x05` observed in the dumps).
 
 | Registers | Content | Note |
 |---|---|---|
