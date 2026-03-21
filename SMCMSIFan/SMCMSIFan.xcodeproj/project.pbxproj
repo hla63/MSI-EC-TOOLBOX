@@ -1,0 +1,269 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C3A6BA11160E4EBC9B485B72 /* SMCMSIFan.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CE85CFE86FC74043AF17372D; };
+		0B89EFA80BD34E219E1924F0 /* SMCMSIFan.h in Headers */ = {isa = PBXBuildFile; fileRef = 67E5064185914E8FA64C8F58; settings = {ATTRIBUTES = (Public, ); }; };
+		583E44E95ECC49409F09330C /* SMCMSIFanKeys.h in Headers */ = {isa = PBXBuildFile; fileRef = 58471F6ECDEA496B8E2AC3B1; settings = {ATTRIBUTES = (Public, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		6C51AC086FD54886887EC276 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Sources/Info.plist; sourceTree = "<group>"; };
+		17730C2674C846BBBABD2D18 /* SMCMSIFan.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SMCMSIFan.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		CE85CFE86FC74043AF17372D /* SMCMSIFan.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SMCMSIFan.cpp; path = Sources/SMCMSIFan.cpp; sourceTree = "<group>"; };
+		67E5064185914E8FA64C8F58 /* SMCMSIFan.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = SMCMSIFan.h; path = Sources/SMCMSIFan.h; sourceTree = "<group>"; };
+		58471F6ECDEA496B8E2AC3B1 /* SMCMSIFanKeys.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = SMCMSIFanKeys.h; path = Sources/SMCMSIFanKeys.h; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		8FD78D127EFB475BB99D5B77 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		ADABC2AA4DC84E288C761E69 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				CE85CFE86FC74043AF17372D /* SMCMSIFan.cpp */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		64BBB280263C4306B56FF806 /* Headers */ = {
+			isa = PBXGroup;
+			children = (
+				67E5064185914E8FA64C8F58 /* SMCMSIFan.h */,
+				58471F6ECDEA496B8E2AC3B1 /* SMCMSIFanKeys.h */,
+			);
+			name = Headers;
+			sourceTree = "<group>";
+		};
+		46EE0C49A5474294B910F65C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				17730C2674C846BBBABD2D18 /* SMCMSIFan.kext */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F9C7313382D94209809AFEC2 = {
+			isa = PBXGroup;
+			children = (
+				ADABC2AA4DC84E288C761E69 /* Sources */,
+				64BBB280263C4306B56FF806 /* Headers */,
+				6C51AC086FD54886887EC276 /* Info.plist */,
+				46EE0C49A5474294B910F65C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		B79895C39B3442899C92144C /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0B89EFA80BD34E219E1924F0 /* SMCMSIFan.h in Headers */,
+				583E44E95ECC49409F09330C /* SMCMSIFanKeys.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		D7B72EDB1CD04AE485FC2912 /* SMCMSIFan */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DC361F701CC542A2B65D885A /* Build configuration list for PBXNativeTarget "SMCMSIFan" */;
+			buildPhases = (
+				B79895C39B3442899C92144C /* Headers */,
+				06F7948D90104A95BE408F98 /* Sources */,
+				8FD78D127EFB475BB99D5B77 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SMCMSIFan;
+			productInstallPath = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+			productName = SMCMSIFan;
+			productReference = 17730C2674C846BBBABD2D18 /* SMCMSIFan.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		73F66CDD5CED47E5A02776FA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					D7B72EDB1CD04AE485FC2912 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = CCB4F2B401374EAC8160E64C /* Build configuration list for PBXProject "SMCMSIFan" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = F9C7313382D94209809AFEC2;
+			productRefGroup = 46EE0C49A5474294B910F65C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D7B72EDB1CD04AE485FC2912 /* SMCMSIFan */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		06F7948D90104A95BE408F98 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C3A6BA11160E4EBC9B485B72 /* SMCMSIFan.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		79160F4A92334BE8BADC0738 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				OTHER_LDFLAGS = "-Wno-unused-command-line-argument";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
+					"$(SRCROOT)/../VirtualSMC.kext/Contents/Resources",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+			};
+			name = Debug;
+		};
+		0C22FC58A57A4FFAB85566E3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				OTHER_LDFLAGS = "-Wno-unused-command-line-argument";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
+					"$(SRCROOT)/../VirtualSMC.kext/Contents/Resources",
+				);
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		D85B7845E32E448793CD3688 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = Sources/Info.plist;
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				KERNEL_FRAMEWORK_HEADERS = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.msi.SMCMSIFan;
+				PRODUCT_NAME = SMCMSIFan;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		6CA3ED9BE86F4727A6CE1714 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = Sources/Info.plist;
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				KERNEL_FRAMEWORK_HEADERS = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.msi.SMCMSIFan;
+				PRODUCT_NAME = SMCMSIFan;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		DC361F701CC542A2B65D885A /* Build configuration list for PBXNativeTarget "SMCMSIFan" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D85B7845E32E448793CD3688 /* Debug */,
+				6CA3ED9BE86F4727A6CE1714 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CCB4F2B401374EAC8160E64C /* Build configuration list for PBXProject "SMCMSIFan" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				79160F4A92334BE8BADC0738 /* Debug */,
+				0C22FC58A57A4FFAB85566E3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 73F66CDD5CED47E5A02776FA /* Project object */;
+}

@@ -1,0 +1,283 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2DA8FE4967B54020B7F93AEE /* MSIECToolbox.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 018023DC8FB940F9AE582853; };
+		BF4B2981B8254FF1B2A4EF30 /* MSIECToolboxDriver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CD8C86F6AB084D2DB5964692; };
+		0D15F4D7090240298A5B9D61 /* MSIECToolboxUserClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AAF3C0B797424C40933967F1; };
+		67030D67FB7549E8B7ECCBA3 /* MSIECToolbox.h in Headers */ = {isa = PBXBuildFile; fileRef = 1871329004B3453A93C171E7; settings = {ATTRIBUTES = (Public, ); }; };
+		842924981E6E4D8EAC298312 /* MSIECToolboxDriver.h in Headers */ = {isa = PBXBuildFile; fileRef = 2B41196481F947BDB6B96C27; settings = {ATTRIBUTES = (Public, ); }; };
+		65FB4965D2734EC783E95611 /* MSIECToolboxShared.h in Headers */ = {isa = PBXBuildFile; fileRef = 5D5C4CB5946240B191BD4230; settings = {ATTRIBUTES = (Public, ); }; };
+		A564F2F998EC476DA21077A1 /* MSIECToolboxUserClient.h in Headers */ = {isa = PBXBuildFile; fileRef = 280521BBCE8F4568BF6C23D3; settings = {ATTRIBUTES = (Public, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A2D1DE5C0FAE46ACB7CC88DC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Sources/Info.plist; sourceTree = "<group>"; };
+		D0708B59666544298871D702 /* MSIECToolbox.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MSIECToolbox.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		018023DC8FB940F9AE582853 /* MSIECToolbox.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = MSIECToolbox.cpp; path = Sources/MSIECToolbox.cpp; sourceTree = "<group>"; };
+		CD8C86F6AB084D2DB5964692 /* MSIECToolboxDriver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = MSIECToolboxDriver.cpp; path = Sources/MSIECToolboxDriver.cpp; sourceTree = "<group>"; };
+		AAF3C0B797424C40933967F1 /* MSIECToolboxUserClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = MSIECToolboxUserClient.cpp; path = Sources/MSIECToolboxUserClient.cpp; sourceTree = "<group>"; };
+		1871329004B3453A93C171E7 /* MSIECToolbox.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = MSIECToolbox.h; path = Sources/MSIECToolbox.h; sourceTree = "<group>"; };
+		2B41196481F947BDB6B96C27 /* MSIECToolboxDriver.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = MSIECToolboxDriver.h; path = Sources/MSIECToolboxDriver.h; sourceTree = "<group>"; };
+		5D5C4CB5946240B191BD4230 /* MSIECToolboxShared.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = MSIECToolboxShared.h; path = Sources/MSIECToolboxShared.h; sourceTree = "<group>"; };
+		280521BBCE8F4568BF6C23D3 /* MSIECToolboxUserClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = MSIECToolboxUserClient.h; path = Sources/MSIECToolboxUserClient.h; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CC92BA6573D9436796CEDDD2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A4D1AF694AB74681A830AD50 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				018023DC8FB940F9AE582853 /* MSIECToolbox.cpp */,
+				CD8C86F6AB084D2DB5964692 /* MSIECToolboxDriver.cpp */,
+				AAF3C0B797424C40933967F1 /* MSIECToolboxUserClient.cpp */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		B9E0AFB5703441479DA29CD0 /* Headers */ = {
+			isa = PBXGroup;
+			children = (
+				1871329004B3453A93C171E7 /* MSIECToolbox.h */,
+				2B41196481F947BDB6B96C27 /* MSIECToolboxDriver.h */,
+				5D5C4CB5946240B191BD4230 /* MSIECToolboxShared.h */,
+				280521BBCE8F4568BF6C23D3 /* MSIECToolboxUserClient.h */,
+			);
+			name = Headers;
+			sourceTree = "<group>";
+		};
+		0CB4FC992AC34071AC5399D4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D0708B59666544298871D702 /* MSIECToolbox.kext */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		03B5388C44EB41D8994AA63E = {
+			isa = PBXGroup;
+			children = (
+				A4D1AF694AB74681A830AD50 /* Sources */,
+				B9E0AFB5703441479DA29CD0 /* Headers */,
+				A2D1DE5C0FAE46ACB7CC88DC /* Info.plist */,
+				0CB4FC992AC34071AC5399D4 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		ACE314DEBD2C4CEBACF3153B /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				67030D67FB7549E8B7ECCBA3 /* MSIECToolbox.h in Headers */,
+				842924981E6E4D8EAC298312 /* MSIECToolboxDriver.h in Headers */,
+				65FB4965D2734EC783E95611 /* MSIECToolboxShared.h in Headers */,
+				A564F2F998EC476DA21077A1 /* MSIECToolboxUserClient.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		345A9B101C8843DD84CEBB55 /* MSIECToolbox */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 892CC4548374448E8E2B19D4 /* Build configuration list for PBXNativeTarget "MSIECToolbox" */;
+			buildPhases = (
+				ACE314DEBD2C4CEBACF3153B /* Headers */,
+				4BD20B64E20B4435BCBE38BF /* Sources */,
+				CC92BA6573D9436796CEDDD2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MSIECToolbox;
+			productInstallPath = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+			productName = MSIECToolbox;
+			productReference = D0708B59666544298871D702 /* MSIECToolbox.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D77E65D94A264B55B559ED92 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					345A9B101C8843DD84CEBB55 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 5785E71D0F7D4344BFEDCA3C /* Build configuration list for PBXProject "MSIECToolbox" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 03B5388C44EB41D8994AA63E;
+			productRefGroup = 0CB4FC992AC34071AC5399D4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				345A9B101C8843DD84CEBB55 /* MSIECToolbox */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4BD20B64E20B4435BCBE38BF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2DA8FE4967B54020B7F93AEE /* MSIECToolbox.cpp in Sources */,
+				BF4B2981B8254FF1B2A4EF30 /* MSIECToolboxDriver.cpp in Sources */,
+				0D15F4D7090240298A5B9D61 /* MSIECToolboxUserClient.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0004E0EB4B144AEB8CA544E3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				OTHER_LDFLAGS = "-Wno-unused-command-line-argument";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+			};
+			name = Debug;
+		};
+		1C2C86BF6C5C4EA19870A60C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				OTHER_LDFLAGS = "-Wno-unused-command-line-argument";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_ENABLE_CPP_EXCEPTIONS = NO;
+				GCC_ENABLE_CPP_RTTI = NO;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
+				);
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		44369DD5F80B4DB997C78651 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = Sources/Info.plist;
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				KERNEL_FRAMEWORK_HEADERS = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.msi.MSIECToolbox;
+				PRODUCT_NAME = MSIECToolbox;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		A00FB330DF0641AD9F3299BD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = Sources/Info.plist;
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				KERNEL_FRAMEWORK_HEADERS = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.msi.MSIECToolbox;
+				PRODUCT_NAME = MSIECToolbox;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		892CC4548374448E8E2B19D4 /* Build configuration list for PBXNativeTarget "MSIECToolbox" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				44369DD5F80B4DB997C78651 /* Debug */,
+				A00FB330DF0641AD9F3299BD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5785E71D0F7D4344BFEDCA3C /* Build configuration list for PBXProject "MSIECToolbox" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0004E0EB4B144AEB8CA544E3 /* Debug */,
+				1C2C86BF6C5C4EA19870A60C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = D77E65D94A264B55B559ED92 /* Project object */;
+}
