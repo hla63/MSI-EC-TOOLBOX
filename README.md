@@ -142,14 +142,8 @@ swiftc MSIECToolboxAgent.swift \
 **Note :** Xcode n'est pas nécessaire pour compiler le LaunchAgent — `swiftc` seul suffit.  
 L'app utilise `.accessory` (pas d'icône dans le Dock) et tourne en arrière-plan.
 
-### 2. Signer (SIP désactivé ou signature ad-hoc)
 
-```bash
-# Ad-hoc (SIP désactivé — cas Hackintosh normal)
-codesign --force --sign - MSIECToolboxAgent
-```
-
-### 3. Installer (dans LaunchAgent)
+### 2. Installer (dans LaunchAgent)
 
 ```bash
 chmod +x build_and_install.sh
