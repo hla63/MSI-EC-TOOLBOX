@@ -1279,7 +1279,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                     if let tap = me.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
                     return nil
                 }
-                guard type == .keyDown else { return Unmanaged.passRetained(event) }
+                // passUnretained : le callback ne possède pas l'événement —
+                // passRetained ajouterait un +1 jamais relâché (fuite d'un
+                // CGEvent par frappe clavier système).
+                guard type == .keyDown else { return Unmanaged.passUnretained(event) }
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let me = Unmanaged<MuteObserver>.fromOpaque(userInfo!).takeUnretainedValue()
                 switch CGKeyCode(keyCode) {
@@ -1300,7 +1303,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                     me.toggleKbBacklight()
                     return nil
                 default:
-                    return Unmanaged.passRetained(event)
+                    return Unmanaged.passUnretained(event)
                 }
             },
             userInfo: ctx)

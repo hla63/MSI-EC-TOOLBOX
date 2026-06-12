@@ -432,27 +432,27 @@ IOReturn MSIECToolbox::setFanCurve(const MSIFanCurve &curve) {
 
     IOReturn ret = kIOReturnSuccess;
     for (int i = 0; i < 6 && ret == kIOReturnSuccess; i++) {
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"((uint8_t)(kMSI_EC_FAN_CPU_TEMP_BASE + i)), "Nd"(kECDataPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"(curve.temps[i]), "Nd"(kECDataPort));
-        if (ret != kIOReturnSuccess)
-            MSIEC_ERR("setFanCurve: temp[%d] write failed: 0x%08X", i, ret);
     }
     for (int i = 0; i < 6 && ret == kIOReturnSuccess; i++) {
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"((uint8_t)(kMSI_EC_FAN_CPU_SPD_BASE + i)), "Nd"(kECDataPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; break; }
+        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
         asm volatile("outb %0, %1" :: "a"(curve.speeds[i]), "Nd"(kECDataPort));
-        if (ret != kIOReturnSuccess)
-            MSIEC_ERR("setFanCurve: speed[%d] write failed: 0x%08X", i, ret);
     }
 
     IOLockUnlock(ecLock);
+    if (ret != kIOReturnSuccess) {
+        MSIEC_ERR("setFanCurve: aborted, EC curve registers may be inconsistent (0x%08X)", ret);
+        return ret;
+    }
     MSIEC_LOG("setFanCurve: 12 registers written (T=%d/%d/%d/%d/%d/%d S=%d/%d/%d/%d/%d/%d)",
         curve.temps[0], curve.temps[1], curve.temps[2],
         curve.temps[3], curve.temps[4], curve.temps[5],

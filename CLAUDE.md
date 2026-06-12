@@ -86,7 +86,7 @@ Boot (OpenCore)
 Login
   LaunchAgent (com.msi.MSIECToolboxAgent)
     IOKit open MSIECToolboxDriver → UserClient (16 selectors)
-    CoreAudio listener → system mute changes → selector setMuteState → EC 0xF3 area
+    CoreAudio listener → system mute changes → selector setMuteState → EC 0x2B/0x2C (LED bit 0x04)
     CGEventTap (requires Accessibility) → keycodes 79/111/118 → direct actions
     500ms poll → selector getSystemState (9) → menu bar update
 ```
@@ -94,7 +94,7 @@ Login
 **Key architectural constraint**: SMCMSIFan reads the EC directly via raw port I/O (ports `0x62`/`0x66`) — it does NOT go through MSIECToolbox's UserClient. Both kexts use `ecLock` independently within their own scope.
 
 **UserClient selectors** (defined in `MSIECToolboxShared.h`, dispatched in `MSIECToolboxUserClient.cpp`):
-0=setMuteState, 1=getMuteState, 2=setCameraState, 3=dumpEC, 4=readFanRPM, 5=setFanMode, 6=setCoolerBoost, 7=setShiftMode, 8=getSystemState, 9=setKbBacklight, 10=getKbBacklight, 11=setBatteryCharge, 12=getBatteryCharge, 13=setFanCurve, 14=getFanCurve
+0=setMuteState, 1=getMuteState (reserved, superseded by 4), 2=dumpEC, 3=setCameraState, 4=getAllState, 5=readFanRPM, 6=setFanMode, 7=setCoolerBoost, 8=setShiftMode, 9=getSystemState, 10=setKbBacklight, 11=getKbBacklight, 12=setBatteryCharge, 13=getBatteryCharge, 14=setFanCurve, 15=getFanCurve
 
 ## EC Register Reference (CONF_G1_5)
 

@@ -45,21 +45,12 @@ bool MSIECToolboxDriver::start(IOService *provider) {
 }
 
 void MSIECToolboxDriver::stop(IOService *provider) {
-    // Do not free stateLock if the Lilu hook is active.
-    // hookedWriteECField() accesses stateLock after hook installation without
-    // a null check — freeing the lock while the hook is live would kernel panic.
-    // If hookInstalled=false (raw EC fallback only), we can free safely.
-    // Leaving the locks allocated when the hook is active is an acceptable
-    // micro-leak preferable to a kernel panic.
-    if (!MSIECToolbox::isHookInstalled()) {
-        if (MSIECToolbox::stateLock) {
-            IOLockFree(MSIECToolbox::stateLock);
-            MSIECToolbox::stateLock = nullptr;
-        }
-        if (MSIECToolbox::ecLock) {
-            IOLockFree(MSIECToolbox::ecLock);
-            MSIECToolbox::ecLock = nullptr;
-        }
-    }
+    // Never free stateLock / ecLock here.
+    // The Lilu hook (when installed) and any in-flight UserClient call read
+    // these static pointers with a null-check-then-lock sequence: freeing the
+    // lock between the check and IOLockLock() is a use-after-free → panic.
+    // The agent polls every 500ms, so the race window is real whenever the
+    // driver terminates (sleep/wake, kextunload). Leaving two IOLocks
+    // allocated for the kext lifetime is an acceptable micro-leak.
     IOService::stop(provider);
 }

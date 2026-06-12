@@ -58,8 +58,6 @@ public:
     static IOReturn fallbackECRead (uint32_t offset, uint8_t &outValue);
 
     // Returns true if the writeECField hook is installed.
-    // Used by Driver::stop() to avoid freeing stateLock while an active hook
-    // may still reference it.
     static bool isHookInstalled() {
         return atomic_load_explicit(&hookInstalled, memory_order_acquire);
     }
