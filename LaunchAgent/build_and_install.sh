@@ -1,29 +1,73 @@
 #!/bin/bash
-set -e
+# Compile, sign and register the MSIECToolbox LaunchAgent.
+#
+# Run it as the user who will use the agent, WITHOUT sudo:
+#   ./build_and_install.sh
+# SMAppService registers the agent in the session of whoever runs the
+# installer, so it must not run as root. The script asks for sudo itself,
+# only for the copies into /Applications and /Library.
+#
+# Code signing — SIGN_IDENTITY selects the codesign identity (default "-",
+# ad-hoc). The Accessibility permission (CGEventTap) is tied to the code
+# signature: with ad-hoc signing it has to be granted again after every
+# rebuild. A stable identity keeps it, e.g. a self-signed "Code Signing"
+# certificate created in Keychain Access (Certificate Assistant):
+#   SIGN_IDENTITY="MSIECToolbox Local" ./build_and_install.sh
+#
+# Agent logs go to the unified log:
+#   log stream --predicate 'process == "MSIECToolboxAgent"'
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "❌ Ne pas lancer ce script avec sudo." >&2
+    echo "   Lancez-le avec votre compte : ./build_and_install.sh" >&2
+    echo "   (sudo est demandé automatiquement pour les étapes qui en ont besoin)" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_PATH="/Applications/MSIECTOOLBOX.app"
+APP_PATH="/Applications/MSIECToolbox.app"
+LEGACY_APP_PATH="/Applications/MSIECTOOLBOX.app"
 SUPPORT_DIR="/Library/Application Support/MSIECToolbox"
 AGENT_DST="$SUPPORT_DIR/MSIECToolboxAgent"
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
-echo "=== MSIECToolbox v4.1.1 — Installation ==="
+# Private build directory: fixed names in /tmp could be swapped by another
+# process between compilation and the sudo copy.
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/msiectoolbox.XXXXXX")"
+trap 'rm -rf "$BUILD_DIR"' EXIT
 
-# 1. Compiler et installer l'agent (toujours recompilé)
+echo "=== MSIECToolbox — Installation ==="
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "ℹ️  Signature ad-hoc : l'autorisation Accessibilité devra être"
+    echo "   ré-accordée après chaque recompilation (voir SIGN_IDENTITY en tête du script)."
+fi
+sudo -v
+
+# 1. Compiler, signer et installer l'agent
 echo "→ Compilation de l'agent..."
-AGENT_SRC="$SCRIPT_DIR/MSIECToolboxAgent.swift"
-swiftc "$AGENT_SRC" \
-    -o /tmp/MSIECToolboxAgent_bin \
+swiftc "$SCRIPT_DIR/MSIECToolboxAgent.swift" \
+    -o "$BUILD_DIR/MSIECToolboxAgent" \
     -framework Foundation \
     -framework CoreAudio \
     -framework IOKit \
     -framework CoreGraphics \
     -framework AppKit \
     -O
+
+# Hardened runtime: DYLD_INSERT_LIBRARIES and unsigned libraries are refused,
+# so no other process can run code with the agent's Accessibility permission.
+# Signed as the user (codesign under sudo cannot reach the login keychain);
+# the signature is embedded in the binary and survives the copy.
+codesign --force --options runtime \
+    --identifier com.msi.MSIECToolboxAgent \
+    --sign "$SIGN_IDENTITY" \
+    "$BUILD_DIR/MSIECToolboxAgent"
+
 sudo mkdir -p "$SUPPORT_DIR"
-sudo cp /tmp/MSIECToolboxAgent_bin "$AGENT_DST"
-sudo chmod 755 "$AGENT_DST"
-sudo xattr -d com.apple.quarantine "$AGENT_DST" 2>/dev/null || true
-echo "   ✅ Agent installé dans $AGENT_DST" 
+sudo install -o root -g wheel -m 755 "$BUILD_DIR/MSIECToolboxAgent" "$AGENT_DST"
+codesign --verify --strict "$AGENT_DST"
+echo "   ✅ Agent signé et installé dans $AGENT_DST"
 
 # 2. Désenregistrer l'ancien LaunchAgent launchctl si présent
 OLD_PLIST="$HOME/Library/LaunchAgents/com.msi.MSIECToolboxAgent.plist"
@@ -37,23 +81,23 @@ fi
 # 3. Compiler le binaire installeur
 echo "→ Compilation de l'installeur..."
 swiftc "$SCRIPT_DIR/MSIECToolboxInstaller.swift" \
-    -o /tmp/MSIECToolboxInstaller_bin \
+    -o "$BUILD_DIR/MSIECToolboxInstaller" \
     -framework Foundation \
     -framework ServiceManagement \
     -O
 echo "   ✅ Installeur compilé"
 
-# 4. Créer le bundle app
+# 4. Construire et signer le bundle app dans le dossier privé
 echo "→ Création de MSIECToolbox.app..."
-sudo rm -rf "$APP_PATH"
-sudo mkdir -p "$APP_PATH/Contents/MacOS"
-sudo mkdir -p "$APP_PATH/Contents/Library/LaunchAgents"
+BUNDLE="$BUILD_DIR/MSIECToolbox.app"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Library/LaunchAgents"
+cp "$BUILD_DIR/MSIECToolboxInstaller" "$BUNDLE/Contents/MacOS/MSIECToolboxInstaller"
+cp "$SCRIPT_DIR/Info.plist"           "$BUNDLE/Contents/Info.plist"
 
-sudo cp /tmp/MSIECToolboxInstaller_bin "$APP_PATH/Contents/MacOS/MSIECToolboxInstaller"
-sudo cp "$SCRIPT_DIR/Info.plist"     "$APP_PATH/Contents/Info.plist"
-
-# Plist de l'agent (dans le bundle)
-sudo tee "$APP_PATH/Contents/Library/LaunchAgents/com.msi.MSIECToolboxAgent.plist" > /dev/null << 'PLISTEOF'
+# Plist de l'agent (dans le bundle). No StandardOutPath/StandardErrorPath:
+# fixed files in /tmp are readable and pre-creatable by other users, and
+# NSLog already writes to the unified log.
+cat > "$BUNDLE/Contents/Library/LaunchAgents/com.msi.MSIECToolboxAgent.plist" << 'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -74,27 +118,30 @@ sudo tee "$APP_PATH/Contents/Library/LaunchAgents/com.msi.MSIECToolboxAgent.plis
     </dict>
     <key>ThrottleInterval</key>
     <integer>30</integer>
-    <key>StandardOutPath</key>
-    <string>/tmp/MSIECToolboxAgent.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/MSIECToolboxAgent.err</string>
 </dict>
 </plist>
 PLISTEOF
 
-echo "   ✅ Bundle créé dans $APP_PATH"
-
-# 5. Signer le bundle (ad-hoc — pas besoin de compte développeur)
 echo "→ Signature du bundle..."
-sudo codesign --force --deep --sign - \
+codesign --force --options runtime \
+    --sign "$SIGN_IDENTITY" \
     --entitlements "$SCRIPT_DIR/entitlements.plist" \
-    "$APP_PATH"
+    "$BUNDLE"
+codesign --verify --deep --strict "$BUNDLE"
 echo "   ✅ Bundle signé"
 
-# Vérifier la signature
-codesign --verify --deep "$APP_PATH" && echo "   ✅ Signature valide"
+# 5. Installer le bundle
+if [ -d "$LEGACY_APP_PATH" ] && ! [ "$LEGACY_APP_PATH" -ef "$APP_PATH" ]; then
+    echo "→ Suppression de l'ancien bundle $LEGACY_APP_PATH..."
+    sudo rm -rf "$LEGACY_APP_PATH"
+fi
+sudo rm -rf "$APP_PATH"
+sudo ditto "$BUNDLE" "$APP_PATH"
+sudo chown -R root:wheel "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
+echo "   ✅ Bundle installé dans $APP_PATH"
 
-# 6. Enregistrer via SMAppService
+# 6. Enregistrer via SMAppService (dans la session de l'utilisateur courant)
 #    On ne fait unregister+register que si le binaire agent a changé
 #    (le register() déclenche une notification système à chaque appel
 #    si le bundle a été recréé — on évite ça en vérifiant le checksum).
@@ -122,3 +169,5 @@ echo ""
 echo "=== Installation terminée ==="
 echo "Si le statut indique 'En attente approbation' :"
 echo "→ Réglages Système > Général > Ouverture > activer MSIECToolbox"
+echo "Touches Fn (CGEventTap) :"
+echo "→ Réglages Système > Confidentialité et sécurité > Accessibilité > MSIECToolboxAgent"

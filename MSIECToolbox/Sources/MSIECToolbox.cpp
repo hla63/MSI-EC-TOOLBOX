@@ -453,6 +453,7 @@ IOReturn MSIECCore::getBatteryCharge(uint8_t &outPercent) {
 //   - Temperatures: strictly increasing order, range [20, 95] °C
 //   - Speeds:       non-decreasing order, range [0, 100] %
 //   - Speed[0] = 0 is valid (fan off below first temperature threshold)
+// Safety floor (MSIECToolboxShared.h): >= 50 % from 70 °C and on the last point.
 //
 // Only effective when fan mode is kMSIFanModeAdvanced.
 // In auto or silent mode the EC ignores the custom curve.
@@ -464,7 +465,11 @@ IOReturn MSIECCore::setFanCurve(const MSIFanCurve &curve) {
         if (curve.speeds[i] > 100)                         return kIOReturnBadArgument;
         if (i > 0 && curve.temps[i]  <= curve.temps[i-1]) return kIOReturnBadArgument;
         if (i > 0 && curve.speeds[i] <  curve.speeds[i-1])return kIOReturnBadArgument;
+        if (curve.temps[i] >= kMSIFanCurveFloorTempC &&
+            curve.speeds[i] < kMSIFanCurveFloorSpeedPct)  return kIOReturnBadArgument;
     }
+    if (curve.speeds[kMSI_EC_FAN_CURVE_POINTS - 1] < kMSIFanCurveFloorSpeedPct)
+        return kIOReturnBadArgument;
 
     // One BusGuard across all 12 writes so no other EC access interleaves
     // with the curve update.
@@ -589,48 +594,59 @@ IOReturn MSIECCore::setShiftMode(MSIShiftModeValue mode) {
 // Returns the 7 most useful EC registers in one bus transaction.
 // Used by the LaunchAgent polling loop (selector 9).
 //
-// Individual read failures are tolerated (value stays 0) so that a single
-// timeout does not block the entire state snapshot.
+// Individual read failures are tolerated so that a single timeout does not
+// block the whole snapshot, but they are reported in validMask: a failed
+// read must not be shown as 0 °C / "Auto" / "Boost OFF", or the agent's
+// toggles would act on a state that was never read.
 // ---------------------------------------------------------------------------
 
 IOReturn MSIECCore::getSystemState(MSISystemState &out) {
-    uint8_t cpuTemp = 0, gpuTemp = 0;
-    uint8_t cpuPct  = 0, gpuPct  = 0;
-    uint8_t fanModeRaw = 0, shiftRaw = 0, boostRaw = 0;
+    static const struct { uint32_t addr; uint8_t bit; } regs[] = {
+        { kMSI_EC_CPU_TEMP_ADDR,     kMSIStateValidCpuTemp     },
+        { kMSI_EC_GPU_TEMP_ADDR,     kMSIStateValidGpuTemp     },
+        { kMSI_EC_CPU_FAN_PCT_ADDR,  kMSIStateValidCpuFanPct   },
+        { kMSI_EC_GPU_FAN_PCT_ADDR,  kMSIStateValidGpuFanPct   },
+        { kMSI_EC_FAN_MODE_ADDR,     kMSIStateValidFanMode     },
+        { kMSI_EC_SHIFT_MODE_ADDR,   kMSIStateValidShiftMode   },
+        { kMSI_EC_COOLER_BOOST_ADDR, kMSIStateValidCoolerBoost },
+    };
+    uint8_t raw[arrsize(regs)] = {};
+    uint8_t valid = 0;
 
     {
         BusGuard bus;
         if (bus.status() != kIOReturnSuccess) return bus.status();
-        ecReadLocked(kMSI_EC_CPU_TEMP_ADDR,     cpuTemp);
-        ecReadLocked(kMSI_EC_GPU_TEMP_ADDR,     gpuTemp);
-        ecReadLocked(kMSI_EC_CPU_FAN_PCT_ADDR,  cpuPct);
-        ecReadLocked(kMSI_EC_GPU_FAN_PCT_ADDR,  gpuPct);
-        ecReadLocked(kMSI_EC_FAN_MODE_ADDR,     fanModeRaw);
-        ecReadLocked(kMSI_EC_SHIFT_MODE_ADDR,   shiftRaw);
-        ecReadLocked(kMSI_EC_COOLER_BOOST_ADDR, boostRaw);
+        for (size_t i = 0; i < arrsize(regs); i++) {
+            if (ecReadLocked(static_cast<uint8_t>(regs[i].addr), raw[i]) == kIOReturnSuccess)
+                valid |= regs[i].bit;
+            else
+                raw[i] = 0;
+        }
     }
 
-    out.cpuTempC    = cpuTemp;
-    out.gpuTempC    = gpuTemp;
-    out.cpuFanPct   = cpuPct;
-    out.gpuFanPct   = gpuPct;
-    out.coolerBoost = (boostRaw & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0;
+    if (valid == 0) return kIOReturnTimeout;
 
-    switch (fanModeRaw) {
+    out.cpuTempC    = raw[0];
+    out.gpuTempC    = raw[1];
+    out.cpuFanPct   = raw[2];
+    out.gpuFanPct   = raw[3];
+    out.coolerBoost = (raw[6] & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0;
+
+    switch (raw[4]) {
         case kMSI_EC_FAN_SILENT:   out.fanMode = kMSIFanModeSilent;   break;
         case kMSI_EC_FAN_ADVANCED: out.fanMode = kMSIFanModeAdvanced; break;
         default:                   out.fanMode = kMSIFanModeAuto;     break;
     }
-    switch (shiftRaw) {
+    switch (raw[5]) {
         case kMSI_EC_SHIFT_ECO:   out.shiftMode = kMSIShiftEco;    break;
         case kMSI_EC_SHIFT_TURBO: out.shiftMode = kMSIShiftTurbo;  break;
         default:                  out.shiftMode = kMSIShiftComfort; break;
     }
-    out.reserved = 0;
+    out.validMask = valid;
 
-    MSIEC_LOG("getSystemState: CPU=%d°C fan=%d%% GPU=%d°C fanMode=%d shift=%d boost=%d",
-               cpuTemp, cpuPct, gpuTemp,
-               (int)out.fanMode, (int)out.shiftMode, (int)out.coolerBoost);
+    MSIEC_LOG("getSystemState: CPU=%d°C fan=%d%% GPU=%d°C fanMode=%d shift=%d boost=%d valid=0x%02X",
+               out.cpuTempC, out.cpuFanPct, out.gpuTempC,
+               (int)out.fanMode, (int)out.shiftMode, (int)out.coolerBoost, valid);
     return kIOReturnSuccess;
 }
 

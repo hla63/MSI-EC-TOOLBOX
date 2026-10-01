@@ -116,8 +116,15 @@ bool MSIECToolboxUserClient::initWithTask(
     if (!IOUserClient::initWithTask(owningTask, securityToken, type, props))
         return false;
 
-    // No privilege check — LED control is accessible to any local user
-    // (personal Hackintosh use case).
+    // These selectors drive fans, camera and charging: only the user logged
+    // in at the console (the LaunchAgent) or root (CLI under sudo) may open
+    // the connection. Other accounts, ssh sessions and daemons are refused.
+    if (clientHasPrivilege(owningTask, kIOClientPrivilegeLocalUser)     != kIOReturnSuccess &&
+        clientHasPrivilege(owningTask, kIOClientPrivilegeAdministrator) != kIOReturnSuccess) {
+        MSIEC_ERR("UserClient refused: client is neither the console user nor root");
+        return false;
+    }
+
     MSIEC_LOG("UserClient::initWithTask OK");
     return true;
 }

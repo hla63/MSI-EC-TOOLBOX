@@ -58,9 +58,14 @@ swiftc MSIECToolboxAgent.swift \
   -framework CoreGraphics -framework UserNotifications \
   -O
 
-# Or compile + register with SMAppService (preferred)
-sudo ./build_and_install.sh
+# Or compile + sign + register with SMAppService (preferred).
+# Run WITHOUT sudo (it refuses root): SMAppService registers the agent in the
+# caller's session; the script calls sudo itself for the copies.
+./build_and_install.sh
+SIGN_IDENTITY="<codesign identity>" ./build_and_install.sh   # stable signature keeps Accessibility across rebuilds
 ```
+
+The script builds in a private `mktemp -d` directory, signs the agent and the installer bundle with the hardened runtime (as the user, before the sudo copy), installs the agent root-owned in `/Library/Application Support/MSIECToolbox/` and the bundle in `/Applications/MSIECToolbox.app`. The LaunchAgent plist has no StandardOut/ErrorPath: logs are in the unified log (`log stream --predicate 'process == "MSIECToolboxAgent"'`).
 
 ### CLI Dump Tool
 
@@ -102,6 +107,12 @@ Login
     2s timer   → selector 5 (readFanRPM)
 ```
 
+**Agent threading**: every IOKit call goes through `MSIECToolboxClient.queue` (serial, `.utility`), usually via `client.run({ work on queue }) { result on main }`. Never call a client method from the main thread: the CGEventTap runs on the main run loop and every keystroke of the system waits for it, while a kext call can block for tens of ms on the EC. The poll/RPM timers fire on that queue and hand a snapshot to `applyPoll` on main, where all agent state (`lastSent*`, `lastCamState`, menu items) lives. Because the queue is serial, a poll queued after a write reads the written state and its result reaches main after the write's completion.
+
+**Mute sync direction**: CoreAudio is the source of truth. EC → CoreAudio only propagates *muting*; if the EC LED reads unmuted while the agent last sent muted, the agent rewrites the LED instead of unmuting CoreAudio (any local process can write the LED bits through the kext).
+
+**UserClient access**: `initWithTask` accepts only the console user (`kIOClientPrivilegeLocalUser`, i.e. the agent) or root (CLI under sudo).
+
 **EC bus ownership** — the most important invariant. All EC access in both kexts goes through `MSIECCore` (`MSIECToolbox.cpp`):
 - `MSIECCore::BusGuard` (RAII) takes `ecLock`, then the ACPI global lock of the PNP0C09 device (`acquireGlobalLock`, 50 ms timeout → `kIOReturnBusy`). AML takes the same global lock around EC fields declared with the `Lock` rule. If the platform has no global lock, the guard degrades to `ecLock` only (logged once).
 - `ecReadLocked` / `ecWriteLocked` are the only raw RD_EC/WR_EC sequences; call them only while holding a `BusGuard`. Multi-register operations (fan curve, Cooler Boost RMW, system state, RPM hi/lo) hold one guard for the whole sequence; `dumpEC` takes one per register so the global lock is never held for 256 reads.
@@ -134,7 +145,9 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0x72–0x77` | speed % | CPU fan curve speed targets (6 breakpoints) |
 | `0x78` | `0x64` | CPU fan curve fixed point 6 (100%, do not modify) |
 
-**Fan curve write rule**: `setFanCurve` writes 12 registers (`0x6A–0x6F` + `0x72–0x77`) under one `BusGuard`; `0x78` is never written. Validation: temperatures strictly increasing in 20–95 °C, speeds non-decreasing in 0–100 %.
+**Fan curve write rule**: `setFanCurve` writes 12 registers (`0x6A–0x6F` + `0x72–0x77`) under one `BusGuard`; `0x78` is never written. Validation: temperatures strictly increasing in 20–95 °C, speeds non-decreasing in 0–100 %, plus a thermal floor (`kMSIFanCurveFloorTempC` / `kMSIFanCurveFloorSpeedPct`: ≥ 50 % from 70 °C and on the last point). The agent mirrors the floor in `FanCurveFloor` to explain refusals — keep both in sync.
+
+**System state validity**: `MSISystemState.validMask` (`kMSIStateValid*`) flags which of the 7 reads succeeded; a cleared bit means the field is 0 and must be ignored (the agent keeps the previous value). The selector fails only when every read failed.
 
 **Cooler Boost write rule**: Always read `0x98` first, mask/unmask only bit 7, write back — bits 0–6 contain persistent firmware state.
 

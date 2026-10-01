@@ -104,7 +104,27 @@ struct MSISystemState {
     var fanMode:     UInt8
     var shiftMode:   UInt8
     var coolerBoost: UInt8
-    var reserved:    UInt8 = 0
+    var validMask:   UInt8 = 0   // MSIStateValid bits — a cleared bit means the EC read failed
+
+    func isValid(_ bit: UInt8) -> Bool { validMask & bit != 0 }
+}
+
+// Mirror of kMSIStateValid* (MSIECToolboxShared.h)
+enum MSIStateValid {
+    static let cpuTemp:     UInt8 = 1 << 0
+    static let gpuTemp:     UInt8 = 1 << 1
+    static let cpuFanPct:   UInt8 = 1 << 2
+    static let gpuFanPct:   UInt8 = 1 << 3
+    static let fanMode:     UInt8 = 1 << 4
+    static let shiftMode:   UInt8 = 1 << 5
+    static let coolerBoost: UInt8 = 1 << 6
+}
+
+// Mirror of kMSIFanCurveFloorTempC / kMSIFanCurveFloorSpeedPct (MSIECToolboxShared.h).
+// The kext rejects any curve below this floor.
+enum FanCurveFloor {
+    static let tempC:    UInt8 = 70
+    static let speedPct: UInt8 = 50
 }
 
 struct MSIBatteryChargeState {
@@ -210,6 +230,21 @@ private final class WatchBox {
 }
 
 final class MSIECToolboxClient {
+
+    // Every IOKit call below blocks while the kext waits for the EC bus
+    // (tens of ms when the EC is slow). They must all run on this serial
+    // queue, never on main: the CGEventTap is on the main run loop and every
+    // keystroke of the system waits for it.
+    let queue = DispatchQueue(label: "com.msi.MSIECToolboxAgent.ec", qos: .utility)
+
+    /// Runs `work` on `queue`, then `done` with its result on the main queue.
+    func run<T>(_ work: @escaping (MSIECToolboxClient) -> T,
+                done: @escaping (T) -> Void = { _ in }) {
+        queue.async {
+            let result = work(self)
+            DispatchQueue.main.async { done(result) }
+        }
+    }
 
     private var connection:      io_connect_t = 0
     private var notifyPort:      IONotificationPortRef? = nil
@@ -442,7 +477,7 @@ final class MSIECToolboxClient {
             { rawCtx, it in
                 let b = Unmanaged<WatchBox>.fromOpaque(rawCtx!).takeUnretainedValue()
                 while IOIteratorNext(it) != 0 {}
-                _ = b.client.connect(); b.onConnect()
+                b.client.run({ _ = $0.connect() }) { b.onConnect() }
             }, ctx, &addedIterator)
         while IOIteratorNext(addedIterator) != 0 {}
 
@@ -452,7 +487,7 @@ final class MSIECToolboxClient {
             { rawCtx, it in
                 let b = Unmanaged<WatchBox>.fromOpaque(rawCtx!).takeUnretainedValue()
                 while IOIteratorNext(it) != 0 {}
-                b.client.disconnect(); b.onDisconnect()
+                b.client.run({ $0.disconnect() }) { b.onDisconnect() }
             }, ctx, &removedIterator)
         while IOIteratorNext(removedIterator) != 0 {}
     }
@@ -930,22 +965,29 @@ final class MenuBarController {
         DispatchQueue.main.async { self.cpuTempItem.title = text }
     }
 
+    // Fields whose EC read failed (validMask bit cleared) keep their previous
+    // value: showing them as 0 °C / Auto / Boost OFF would make the toggles
+    // act on a state that was never read.
     func updateSystemState(state: MSISystemState) {
         DispatchQueue.main.async {
             // Température
-            let cpuStr = state.cpuTempC > 0 ? "\(state.cpuTempC) °C" : "—"
-            self.cpuTempItem.title = "CPU : \(cpuStr)"
+            if state.isValid(MSIStateValid.cpuTemp) {
+                let cpuStr = state.cpuTempC > 0 ? "\(state.cpuTempC) °C" : "—"
+                self.cpuTempItem.title = "CPU : \(cpuStr)"
+            }
 
             // Fan mode
-            let fm = FanMode(rawValue: state.fanMode) ?? .auto_
-            if fm != self.currentFanMode {
-                self.currentFanMode = fm
-                self.updateFanModeItems(mode: fm)
+            if state.isValid(MSIStateValid.fanMode) {
+                let fm = FanMode(rawValue: state.fanMode) ?? .auto_
+                if fm != self.currentFanMode {
+                    self.currentFanMode = fm
+                    self.updateFanModeItems(mode: fm)
+                }
             }
 
             // Cooler Boost
             let boost = state.coolerBoost != 0
-            if boost != self.coolerBoostOn {
+            if state.isValid(MSIStateValid.coolerBoost) && boost != self.coolerBoostOn {
                 self.coolerBoostOn = boost
                 self.coolerBoostItem.title = "Cooler Boost : \(boost ? "ON 🔥" : "OFF")"
                 self.coolerBoostItem.image = self.sfImage("flame", muted: boost)
@@ -1203,12 +1245,13 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         menuBar.onOpenFanCurve       = { [weak self] in self?.openFanCurvePanel() }
         menuBar.onToggleCoolerBoost = { [weak self] in self?.toggleCoolerBoost() }
 
-        _ = client.connect()
-        if let lvl = client.getKbBacklight() {
-            DispatchQueue.main.async { self.menuBar.updateKbBacklightItems(level: lvl) }
-        }
-        if let pct = client.getBatteryCharge() {
-            DispatchQueue.main.async { self.menuBar.updateBatteryLimitItem(percent: pct) }
+        client.run({ c -> (kb: UInt8?, battery: UInt8?) in
+            _ = c.connect()
+            return (c.getKbBacklight(), c.getBatteryCharge())
+        }) { [weak self] initial in
+            guard let self = self else { return }
+            if let lvl = initial.kb      { self.menuBar.updateKbBacklightItems(level: lvl) }
+            if let pct = initial.battery { self.menuBar.updateBatteryLimitItem(percent: pct) }
         }
         client.watchService(
             onConnect:    { [weak self] in self?.refresh() },
@@ -1238,7 +1281,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = eventTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes); eventTapSource = nil }
         client.stopWatching()
-        client.disconnect()
+        client.queue.sync { client.disconnect() }
         NSLog("[MSIECToolboxAgent] Arrêté proprement")
     }
 
@@ -1373,6 +1416,8 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     }
 
     private func toggleDisplayRotation() {
+        let previousDegree  = currentRotDegree
+        let previousRotated = displayRotated
         let newDegree: Int
         if menuBar.prefRotationMode == "90cycle" {
             currentRotDegree = (currentRotDegree + 90) % 360
@@ -1385,56 +1430,92 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         }
         menuBar.updateRotItem(degree: newDegree)
 
+        // Undo the optimistic state above when displayplacer did not rotate,
+        // unless another rotation has been requested in the meantime.
+        let revert: (String) -> Void = { [weak self] reason in
+            DispatchQueue.main.async {
+                guard let self = self, self.currentRotDegree == newDegree else { return }
+                NSLog("[MSIECToolboxAgent] Rotation annulée : %@", reason)
+                self.currentRotDegree = previousDegree
+                self.displayRotated   = previousRotated
+                self.menuBar.updateRotItem(degree: previousDegree)
+            }
+        }
+
         NSLog("[MSIECToolboxAgent] Rotation écran → %d°", newDegree)
         let spec = "id:\(kDisplayID) res:1920x1080 color_depth:4 enabled:true scaling:off origin:(0,0) degree:\(newDegree)"
         // Exécution sur thread background pour ne pas geler la barre de menu
         DispatchQueue.global(qos: .userInitiated).async {
+            let path = "/usr/local/bin/displayplacer"
+            guard FileManager.default.isExecutableFile(atPath: path) else {
+                revert("\(path) introuvable (brew install displayplacer)")
+                return
+            }
             let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/local/bin/displayplacer")
+            task.executableURL = URL(fileURLWithPath: path)
             task.arguments = [spec]
             let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError  = pipe
-            try? task.run()
+            do {
+                try task.run()
+            } catch {
+                // terminationStatus on a process that never ran raises an
+                // Objective-C exception and kills the agent.
+                revert("lancement impossible : \(error.localizedDescription)")
+                return
+            }
+            // Drain the pipe before waiting so a large output cannot block the child.
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             task.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let out = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !out.isEmpty { NSLog("[MSIECToolboxAgent] displayplacer: %@", out) }
             NSLog("[MSIECToolboxAgent] Rotation terminée (exit=%d)", task.terminationStatus)
+            if task.terminationStatus != 0 {
+                revert("displayplacer exit=\(task.terminationStatus)")
+            }
         }
     }
 
     // ── Toggle caméra — simule F6 pour piloter le firmware MSI ──────────────
+    //
+    // Every kext call below goes through client.run: the IOKit call runs on
+    // the EC queue and the result comes back on main. The CGEventTap calls
+    // these actions directly, so they must never block.
 
     private func toggleCameraState() {
         let newState = !lastCamState  // lastCamState = cameraOff (true = coupée)
-        if client.setCameraState(cameraOff: newState) {
-            NSLog("[MSIECToolboxAgent] setCameraState → cameraOff=%d", newState ? 1 : 0)
-            if menuBar.prefShowOSD {
-                DispatchQueue.main.async {
+        client.run({ $0.setCameraState(cameraOff: newState) }) { [weak self] ok in
+            guard let self = self else { return }
+            if ok {
+                NSLog("[MSIECToolboxAgent] setCameraState → cameraOff=%d", newState ? 1 : 0)
+                if self.menuBar.prefShowOSD {
                     MuteOSD.show(muted: newState, isMic: false, isCam: true)
                 }
+            } else {
+                NSLog("[MSIECToolboxAgent] setCameraState échoué — kext non connecté ?")
             }
-        } else {
-            NSLog("[MSIECToolboxAgent] setCameraState échoué — kext non connecté ?")
         }
     }
 
     // ── Fan mode, shift mode, cooler boost ───────────────────────────────────
 
     private func setFanMode(_ mode: FanMode) {
-        if client.setFanMode(mode) {
-            NSLog("[MSIECToolboxAgent] setFanMode → %@", mode.label)
+        client.run({ $0.setFanMode(mode) }) { ok in
+            if ok { NSLog("[MSIECToolboxAgent] setFanMode → %@", mode.label) }
             // pollEC() confirmera le mode dans 500ms via getSystemState
         }
     }
 
     private func setKbBacklight(_ level: UInt8) {
-        if client.setKbBacklight(level: level) {
-            NSLog("[MSIECToolboxAgent] setKbBacklight → %d", level)
-            menuBar.updateKbBacklightItems(level: level)
-        } else {
-            NSLog("[MSIECToolboxAgent] setKbBacklight %d — kext non connecté", level)
+        client.run({ $0.setKbBacklight(level: level) }) { [weak self] ok in
+            if ok {
+                NSLog("[MSIECToolboxAgent] setKbBacklight → %d", level)
+                self?.menuBar.updateKbBacklightItems(level: level)
+            } else {
+                NSLog("[MSIECToolboxAgent] setKbBacklight %d — kext non connecté", level)
+            }
         }
     }
 
@@ -1452,7 +1533,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     }
 
     private func showECDump() {
-        let fetcher: () -> [UInt8]? = { [weak self] in self?.client.dumpEC() }
+        let fetcher: ECDumpFetcher = { [weak self] done in
+            guard let self = self else { done(nil); return }
+            self.client.run({ $0.dumpEC() }, done: done)
+        }
         DispatchQueue.main.async {
             ECDumpPanel.show(fetcher: fetcher)
         }
@@ -1461,30 +1545,29 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     private func toggleBatteryLimit() {
         let current = menuBar.currentBatteryLimit
         let next: UInt8 = (current <= 80) ? 100 : 80
-        if client.setBatteryCharge(percent: next) {
-            NSLog("[MSIECToolboxAgent] setBatteryCharge → %d%%", next)
-            menuBar.updateBatteryLimitItem(percent: next)
-        } else {
-            NSLog("[MSIECToolboxAgent] setBatteryCharge — kext non connecté")
+        client.run({ $0.setBatteryCharge(percent: next) }) { [weak self] ok in
+            if ok {
+                NSLog("[MSIECToolboxAgent] setBatteryCharge → %d%%", next)
+                self?.menuBar.updateBatteryLimitItem(percent: next)
+            } else {
+                NSLog("[MSIECToolboxAgent] setBatteryCharge — kext non connecté")
+            }
         }
     }
 
     private func openFanCurvePanel() {
         // Activer le mode Advanced si ce n'est pas déjà le cas
-        if menuBar.currentFanMode != .advanced {
-            _ = client.setFanMode(.advanced)
-            menuBar.updateFanModeItems(mode: .advanced)
-        }
-        // Lire la courbe actuelle depuis l'EC
-        let currentCurve = client.getFanCurve() ?? MSIFanCurve()
-        DispatchQueue.main.async {
-            FanCurvePanel.show(current: currentCurve) { [weak self] newCurve in
-                guard let self = self else { return }
-                if self.client.setFanCurve(newCurve) {
-                    NSLog("[MSIECToolboxAgent] setFanCurve applied")
-
-                } else {
-                    NSLog("[MSIECToolboxAgent] setFanCurve failed — kext non connecté")
+        let switchToAdvanced = menuBar.currentFanMode != .advanced
+        client.run({ c -> MSIFanCurve? in
+            if switchToAdvanced { _ = c.setFanMode(.advanced) }
+            return c.getFanCurve()  // courbe actuelle lue dans l'EC
+        }) { [weak self] curve in
+            guard let self = self else { return }
+            if switchToAdvanced { self.menuBar.updateFanModeItems(mode: .advanced) }
+            FanCurvePanel.show(current: curve ?? MSIFanCurve()) { [weak self] newCurve in
+                self?.client.run({ $0.setFanCurve(newCurve) }) { ok in
+                    NSLog(ok ? "[MSIECToolboxAgent] setFanCurve applied"
+                             : "[MSIECToolboxAgent] setFanCurve failed — refusée par le kext ou kext non connecté")
                 }
             }
         }
@@ -1492,30 +1575,44 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
 
     private func toggleCoolerBoost() {
         let newState = !(menuBar.currentCoolerBoostOn)
-        if client.setCoolerBoost(newState) {
-            NSLog("[MSIECToolboxAgent] coolerBoost → %@", newState ? "ON" : "OFF")
+        client.run({ $0.setCoolerBoost(newState) }) { ok in
+            if ok { NSLog("[MSIECToolboxAgent] coolerBoost → %@", newState ? "ON" : "OFF") }
         }
     }
 
     // ── Polling EC (500ms) — couvre mute, caméra, fan%, temp, modes ─────────
     // Le fanPolling séparé (2s) est conservé uniquement pour les RPM bruts.
+    // Both timers fire on the EC queue (blocking reads), then hand the
+    // results to the main queue, where all agent state lives.
+
+    private struct PollSnapshot {
+        let mute:      (micMuted: Bool, speakerMuted: Bool, cameraOff: Bool)?
+        let backlight: UInt8?
+        let system:    MSISystemState?
+    }
 
     private func startECPolling() {
         // 500ms poll: system state (temps, fan %, modes) + LED sync
-        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timer = DispatchSource.makeTimerSource(queue: client.queue)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(100))
-        timer.setEventHandler { [weak self] in self?.pollEC() }
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let snap = PollSnapshot(mute:      self.client.readECMuteState(),
+                                    backlight: self.client.getKbBacklight(),
+                                    system:    self.client.readSystemState())
+            DispatchQueue.main.async { self.applyPoll(snap) }
+        }
         timer.resume()
         pollTimer = timer
 
         // Dedicated 2s timer for RPM (4 EC reads via ISW formula).
         // Separated from the 500ms poll to reduce EC bus load:
         // RPM precision at 500ms is unnecessary for the menu bar display.
-        let rpmTimer = DispatchSource.makeTimerSource(queue: .main)
+        let rpmTimer = DispatchSource.makeTimerSource(queue: client.queue)
         rpmTimer.schedule(deadline: .now() + 2.0, repeating: 2.0, leeway: .milliseconds(500))
         rpmTimer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            if let rpm = self.client.readFanRPM() {
+            guard let self = self, let rpm = self.client.readFanRPM() else { return }
+            DispatchQueue.main.async {
                 self.menuBar.updateFanItems(cpuRPM: rpm.cpuRPM, gpuRPM: rpm.gpuRPM)
             }
         }
@@ -1523,43 +1620,45 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         fanTimer = rpmTimer
     }
 
-    private func pollEC() {
+    private func applyPoll(_ snap: PollSnapshot) {
         // ── Mute / caméra via MSIAllState (sélecteur kMSIGetAllState) ──────
-        if let mute = client.readECMuteState() {
-            let speakerChanged = mute.speakerMuted != lastSentSpeaker
-            let micChanged     = mute.micMuted     != lastSentMic
-            let camChanged     = mute.cameraOff    != lastCamState
-
-            if speakerChanged {
-                setAudioMute(deviceID: defaultOutputDevice(), input: false, muted: mute.speakerMuted)
+        if let mute = snap.mute {
+            // EC → CoreAudio only in the muting direction. Any local process
+            // can write the LED bits through the kext; following an EC
+            // "unmuted" would let it switch the microphone back on behind the
+            // user's back. An EC that reads unmuted while we last sent muted
+            // gets the LED rewritten instead.
+            if mute.speakerMuted && !lastSentSpeaker {
+                setAudioMute(deviceID: defaultOutputDevice(), input: false, muted: true)
+                lastSentSpeaker = true
+                NSLog("[MSIECToolboxAgent] EC poll → speaker muet")
             }
-            if micChanged {
-                setAudioMute(deviceID: defaultInputDevice(), input: true, muted: mute.micMuted)
+            if mute.micMuted && !lastSentMic {
+                setAudioMute(deviceID: defaultInputDevice(), input: true, muted: true)
+                lastSentMic = true
+                NSLog("[MSIECToolboxAgent] EC poll → mic muet")
             }
-            if camChanged {
+            if (!mute.speakerMuted && lastSentSpeaker) || (!mute.micMuted && lastSentMic) {
+                let spk = lastSentSpeaker, mic = lastSentMic
+                NSLog("[MSIECToolboxAgent] LED mute effacée hors agent — réécriture")
+                client.run({ $0.setMuteState(speaker: spk, mic: mic) })
+            }
+            if mute.cameraOff != lastCamState {
                 lastCamState = mute.cameraOff
                 NSLog("[MSIECToolboxAgent] EC camera: %@", lastCamState ? "coupée" : "active")
                 menuBar.updateCameraItem(active: !lastCamState)
             }
-            if speakerChanged || micChanged {
-                NSLog("[MSIECToolboxAgent] EC poll → speaker=%d mic=%d",
-                      mute.speakerMuted ? 1 : 0, mute.micMuted ? 1 : 0)
-                lastSentSpeaker = mute.speakerMuted
-                lastSentMic     = mute.micMuted
-            }
         }
 
         // ── Rétroéclairage clavier — sync si changé par firmware (Fn+F8) ──────
-        if let lvl = client.getKbBacklight() {
-            if lvl != menuBar.currentKbBacklightLevel {
-                DispatchQueue.main.async { self.menuBar.updateKbBacklightItems(level: lvl) }
-            }
+        if let lvl = snap.backlight, lvl != menuBar.currentKbBacklightLevel {
+            menuBar.updateKbBacklightItems(level: lvl)
         }
 
         // ── Fan / température / modes via MSISystemState (sélecteur kMSIGetSystemState) ──
-        guard let sys = client.readSystemState() else { return }
-        menuBar.updateSystemState(state: sys)
-
+        if let sys = snap.system {
+            menuBar.updateSystemState(state: sys)
+        }
         // RPM updated by dedicated 2s timer (startECPolling)
     }
 
@@ -1635,8 +1734,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         guard spk != lastSentSpeaker || mic != lastSentMic else { return }
         NSLog("[MSIECToolboxAgent] CoreAudio → EC: speaker=%d mic=%d",
               spk ? 1 : 0, mic ? 1 : 0)
-        if client.setMuteState(speaker: spk, mic: mic) {
-            lastSentSpeaker = spk; lastSentMic = mic
+        // The EC queue is serial: a poll queued after this write reads the
+        // new LED state, and its result reaches main after lastSent* is set.
+        client.run({ $0.setMuteState(speaker: spk, mic: mic) }) { [weak self] ok in
+            if ok { self?.lastSentSpeaker = spk; self?.lastSentMic = mic }
         }
     }
 
@@ -2131,6 +2232,10 @@ final class PreferencesPanel: NSObject {
 // MARK: – Fenêtre Table EC
 // ---------------------------------------------------------------------------
 
+// Asynchronous EC dump: the 256 reads run on the EC queue, `done` is called
+// on main with the bytes (nil on failure).
+typealias ECDumpFetcher = (@escaping ([UInt8]?) -> Void) -> Void
+
 final class ECDumpPanel: NSObject {
 
     static var shared: ECDumpPanel?
@@ -2138,11 +2243,11 @@ final class ECDumpPanel: NSObject {
     private var panel:       NSPanel!
     private var cells:       [[NSTextField]] = []  // 16 lignes × 16 colonnes
     private var rowLabels:   [NSTextField] = []
-    private var fetcher:     (() -> [UInt8]?)?
+    private var fetcher:     ECDumpFetcher?
     private var autoRefreshTimer: Timer?
     private var autoRefreshCb: NSButton!
 
-    static func show(fetcher: @escaping () -> [UInt8]?) {
+    static func show(fetcher: @escaping ECDumpFetcher) {
         if shared == nil { shared = ECDumpPanel() }
         shared!.fetcher = fetcher
         shared!.refresh()
@@ -2253,8 +2358,8 @@ final class ECDumpPanel: NSObject {
     }
 
     func refresh() {
-        guard let bytes = fetcher?() else { return }
-        DispatchQueue.main.async {
+        fetcher?({ [weak self] bytes in
+            guard let self = self, let bytes = bytes, bytes.count >= 256 else { return }
             for row in 0..<16 {
                 for col in 0..<16 {
                     let val = bytes[row * 16 + col]
@@ -2264,7 +2369,7 @@ final class ECDumpPanel: NSObject {
                     cell.textColor = (val == 0) ? .tertiaryLabelColor : .labelColor
                 }
             }
-        }
+        })
     }
 
     @objc private func tapRefresh() { refresh() }
@@ -2540,8 +2645,30 @@ final class FanCurvePanel: NSObject {
     }
 
     @objc private func tapApply() {
-        onApply?(readCurve())
+        let curve = readCurve()
+        if let problem = FanCurvePanel.floorViolation(curve) {
+            let alert = NSAlert()
+            alert.messageText = "Courbe refusée"
+            alert.informativeText = problem
+            alert.runModal()
+            return
+        }
+        onApply?(curve)
         panel.orderOut(nil)
+    }
+
+    // Same rule as the kext (kMSIFanCurveFloor*): checked here so the user
+    // gets an explanation instead of a silent kIOReturnBadArgument.
+    static func floorViolation(_ curve: MSIFanCurve) -> String? {
+        let t = curve.tempsArray, s = curve.speedsArray
+        for i in 0..<6 where t[i] >= FanCurveFloor.tempC && s[i] < FanCurveFloor.speedPct {
+            return "Point \(i + 1) : à \(t[i]) °C la vitesse doit être d'au moins \(FanCurveFloor.speedPct) % "
+                 + "(sécurité thermique à partir de \(FanCurveFloor.tempC) °C)."
+        }
+        if s[5] < FanCurveFloor.speedPct {
+            return "Le dernier point doit demander au moins \(FanCurveFloor.speedPct) %."
+        }
+        return nil
     }
 
     @objc private func tapReset() {

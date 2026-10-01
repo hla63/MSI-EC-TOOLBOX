@@ -130,10 +130,20 @@ swiftc MSIECToolboxAgent.swift \
 
 ### 2. Install (LaunchAgent)
 
+Run it **without sudo**, from the account that will use the agent: it registers the agent in your session and asks for your password only for the copies into `/Applications` and `/Library`.
+
 ```bash
 chmod +x build_and_install.sh
-sudo ./build_and_install.sh
+./build_and_install.sh
 ```
+
+The agent is signed with the hardened runtime. By default the signature is ad-hoc, which means the Accessibility permission below must be granted again after every rebuild. To keep it across rebuilds, create a code signing certificate once (Keychain Access › Certificate Assistant › Create a Certificate, type *Code Signing*) and pass its name:
+
+```bash
+SIGN_IDENTITY="MSIECToolbox Local" ./build_and_install.sh
+```
+
+Agent logs: `log stream --predicate 'process == "MSIECToolboxAgent"'`.
 
 ### Accessibility Permission (required for CGEventTap)
 The LaunchAgent intercepts keystrokes via `CGEvent.tapCreate`. macOS requires explicit permission:
