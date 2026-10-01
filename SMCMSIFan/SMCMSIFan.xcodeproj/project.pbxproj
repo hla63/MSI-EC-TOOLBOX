@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3BA1E9B0E259F71326DC2B4E /* libkmod.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 56F6D5E5EF06CC28116E07AD /* libkmod.a */; };
 		C3A6BA11160E4EBC9B485B72 /* SMCMSIFan.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CE85CFE86FC74043AF17372D; };
 		0B89EFA80BD34E219E1924F0 /* SMCMSIFan.h in Headers */ = {isa = PBXBuildFile; fileRef = 67E5064185914E8FA64C8F58; settings = {ATTRIBUTES = (Public, ); }; };
 		583E44E95ECC49409F09330C /* SMCMSIFanKeys.h in Headers */ = {isa = PBXBuildFile; fileRef = 58471F6ECDEA496B8E2AC3B1; settings = {ATTRIBUTES = (Public, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		56F6D5E5EF06CC28116E07AD /* libkmod.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libkmod.a; path = ../MacKernelSDK/Library/x86_64/libkmod.a; sourceTree = SOURCE_ROOT; };
 		6C51AC086FD54886887EC276 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Sources/Info.plist; sourceTree = "<group>"; };
 		17730C2674C846BBBABD2D18 /* SMCMSIFan.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SMCMSIFan.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		CE85CFE86FC74043AF17372D /* SMCMSIFan.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = SMCMSIFan.cpp; path = Sources/SMCMSIFan.cpp; sourceTree = "<group>"; };
@@ -25,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3BA1E9B0E259F71326DC2B4E /* libkmod.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -62,6 +65,7 @@
 				ADABC2AA4DC84E288C761E69 /* Sources */,
 				64BBB280263C4306B56FF806 /* Headers */,
 				6C51AC086FD54886887EC276 /* Info.plist */,
+				56F6D5E5EF06CC28116E07AD /* libkmod.a */,
 				46EE0C49A5474294B910F65C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -168,12 +172,17 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../MSIECToolbox/Sources",
 					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
 					"$(SRCROOT)/../VirtualSMC.kext/Contents/Resources",
 				);
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				ARCHS = x86_64;
+				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				MODULE_VERSION = 1.1.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 			};
@@ -199,10 +208,15 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../MacKernelSDK/Headers",
+					"$(SRCROOT)/../MSIECToolbox/Sources",
 					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
 					"$(SRCROOT)/../VirtualSMC.kext/Contents/Resources",
 				);
 				MTL_FAST_MATH = YES;
+				ARCHS = x86_64;
+				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				MODULE_VERSION = 1.1.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				VALIDATE_PRODUCT = YES;
@@ -214,10 +228,26 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
 				INFOPLIST_FILE = Sources/Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
-				KERNEL_FRAMEWORK_HEADERS = YES;
+				GCC_ENABLE_KERNEL_DEVELOPMENT = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"MODULE_VERSION=$(MODULE_VERSION)",
+					"PRODUCT_NAME=$(PRODUCT_NAME)",
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Library/x86_64",
+				);
+				MODULE_NAME = com.msi.SMCMSIFan;
+				MODULE_START = "$(PRODUCT_NAME)_kern_start";
+				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-static",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.msi.SMCMSIFan;
 				PRODUCT_NAME = SMCMSIFan;
 				SKIP_INSTALL = YES;
@@ -230,10 +260,26 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
 				INFOPLIST_FILE = Sources/Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
-				KERNEL_FRAMEWORK_HEADERS = YES;
+				GCC_ENABLE_KERNEL_DEVELOPMENT = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"MODULE_VERSION=$(MODULE_VERSION)",
+					"PRODUCT_NAME=$(PRODUCT_NAME)",
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Library/x86_64",
+				);
+				MODULE_NAME = com.msi.SMCMSIFan;
+				MODULE_START = "$(PRODUCT_NAME)_kern_start";
+				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-static",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.msi.SMCMSIFan;
 				PRODUCT_NAME = SMCMSIFan;
 				SKIP_INSTALL = YES;

@@ -20,7 +20,10 @@
 #define MSIEC_ERR(fmt, ...)  IOLog("MSIECToolbox [ERR]: " fmt "\n", ##__VA_ARGS__)
 #endif
 
-class MSIECToolbox {
+// EC logic shared by the Lilu hook, the UserClient and SMCMSIFan.
+// Not named MSIECToolbox: Lilu's plugin_start.hpp already declares
+// `class PRODUCT_NAME : IOService`, i.e. `class MSIECToolbox`.
+class MSIECCore {
 public:
     static void pluginStart();
 
@@ -51,25 +54,54 @@ public:
     static IOReturn setBatteryCharge(uint8_t percent);  // 80 or 100
     static IOReturn getBatteryCharge(uint8_t &outPercent);
 
-    // --- Raw EC I/O fallback ------------------------------------------------
-    // Public: required by MSIECToolboxUserClient and MSIECToolboxDriver.
+    // --- EC bus access ------------------------------------------------------
+    // Every EC access in both kexts goes through these, so a multi-byte
+    // sequence is never interleaved with another one (see BusGuard).
 
-    static IOReturn fallbackECWrite(uint32_t offset, uint8_t value);
-    static IOReturn fallbackECRead (uint32_t offset, uint8_t &outValue);
+    static IOReturn ecWrite(uint32_t offset, uint8_t value);
+    static IOReturn ecRead (uint32_t offset, uint8_t &outValue);
 
-    // Returns true if the writeECField hook is installed.
-    static bool isHookInstalled() {
-        return atomic_load_explicit(&hookInstalled, memory_order_acquire);
-    }
+    // Reads `count` registers in a single bus transaction.
+    // Entry point for SMCMSIFan (via MSIECToolboxDriver::callPlatformFunction).
+    static IOReturn readRegisters(const uint8_t *offsets, uint8_t *outValues, uint32_t count);
 
-    // stateLock / ecLock: public so that MSIECToolboxDriver::start/stop can
-    // initialise and release them independently of the Lilu hook.
+    // EC ACPI device (PNP0C09), set by MSIECToolboxDriver::start().
+    // Used to take the ACPI global lock around raw port I/O.
+    static void setECDevice(IOACPIPlatformDevice *device);
+
+    // stateLock / ecLock: initialised by pluginStart() or MSIECToolboxDriver::start(),
+    // whichever runs first, and never freed (see MSIECToolboxDriver::stop()).
     //   stateLock: protects speakerMuted / micMuted (short critical section)
     //   ecLock:    serialises EC bus access (port I/O sequences are non-reentrant)
     static IOLock *stateLock;
     static IOLock *ecLock;
 
+    static bool allocLocks();
+
 private:
+    // Exclusive ownership of the EC bus for the lifetime of the object:
+    // ecLock first (serialises this kext and SMCMSIFan), then the ACPI
+    // global lock, which AML takes around EC fields declared with the
+    // `Lock` rule. Port I/O is only allowed while status() is success.
+    class BusGuard {
+    public:
+        BusGuard();
+        ~BusGuard();
+        IOReturn status() const { return st; }
+    private:
+        IOReturn st {kIOReturnNotReady};
+        IOLock  *heldLock {nullptr};  // ecLock as seen by the constructor
+        bool     haveGlobalLock {false};
+        UInt32   globalLockToken {0};
+        IOACPIPlatformDevice *device {nullptr};
+    };
+
+    // Raw RD_EC / WR_EC sequences — caller must hold a BusGuard.
+    static IOReturn ecReadLocked (uint8_t offset, uint8_t &outValue);
+    static IOReturn ecWriteLocked(uint8_t offset, uint8_t value);
+    static bool ecWaitIBF();
+    static bool ecWaitOBF();
+
     // kextInfo lifetime must outlast the Lilu callback; static storage
     // in __DATA guarantees this. Non-const because onKextLoad() may update
     // loadIndex during the callback.
@@ -78,9 +110,14 @@ private:
     static mach_vm_address_t orgWriteECField;
 
     // hookInstalled is written from patcherCallback() (Lilu thread) and read
-    // from setMuteState() (IOKit UserClient thread) without a lock.
-    // _Atomic ensures cross-thread visibility with memory_order_acquire/release.
+    // from other threads without a lock.
     static _Atomic(bool) hookInstalled;
+
+    static _Atomic(IOACPIPlatformDevice *) ecDevice;
+
+    // Cleared on the first non-timeout failure of acquireGlobalLock()
+    // (firmware without a global lock): raw I/O then only relies on ecLock.
+    static _Atomic(bool) globalLockUsable;
 
     // Protected by stateLock
     static bool speakerMuted;
@@ -94,12 +131,7 @@ private:
                                        const void *value,
                                        IOByteCount size);
 
-    static bool ecWaitIBF();
-    static bool ecWaitOBF();
-
-    // MSIECToolboxDriver needs access to stateLock from start()/stop().
-    // All other members remain private.
-    friend class MSIECToolboxDriver;
+    static IOReturn setLEDBit(BusGuard &bus, uint8_t offset, bool on);
 };
 
 #endif /* MSIECToolbox_h */

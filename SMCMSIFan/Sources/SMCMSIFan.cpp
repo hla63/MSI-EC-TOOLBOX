@@ -1,246 +1,225 @@
 // ---------------------------------------------------------------------------
 // SMCMSIFan.cpp
 //
-// Lilu + VirtualSMC plugin — exposes fan RPM and temperatures for the
+// VirtualSMC plugin — exposes fan RPM and temperatures for the
 // MSI Modern 15 A10M as standard SMC keys.
 //
 // Published keys:
-//   F0Ac / F0Mn / F0Mx / FNum  — CPU fan RPM (ISW formula, dynamic read)
+//   F0Ac / F0Mn / F0Mx / FNum  — CPU fan RPM (ISW formula)
 //   TC0P                        — CPU package temperature (EC 0x68, sp78)
 //   TG0P                        — integrated GPU temperature (EC 0x80, sp78)
 //
 // Flow:
-//   pluginStart() registers the 6 SMC keys via VirtualSMCAPI.
-//   readValue() on each key reads the EC on demand (pull model, no timer).
+//   start()                  adds the keys, waits for VirtualSMC
+//   vsmcNotificationHandler  submits the plugin, starts a 1s poller
+//   refreshSensors()         reads the EC through MSIECToolboxDriver
+//                            (kMSIECReadRegistersFunction) into a cache
+//   readAccess()             returns the cache
 // ---------------------------------------------------------------------------
 
 #include "SMCMSIFan.h"
+#include <Headers/kern_version.hpp>
+
+OSDefineMetaClassAndStructors(SMCMSIFan, IOService)
+
+bool     ADDPR(debugEnabled)    = false;
+uint32_t ADDPR(debugPrintDelay) = 0;
+
+_Atomic(uint16_t) SMCMSIFan::cpuRPM   = 0;
+_Atomic(uint8_t)  SMCMSIFan::cpuTempC = 0;
+_Atomic(uint8_t)  SMCMSIFan::gpuTempC = 0;
 
 // ---------------------------------------------------------------------------
-// Lilu plugin registration
+// IOService lifecycle
 // ---------------------------------------------------------------------------
 
-static const char *bootargOff[]   = { "-smcmsifan.off"  };
-static const char *bootargDebug[] = { "-smcmsifan.dbg"  };
-static const char *bootargBeta[]  = { "-smcmsifan.beta" };
+IOService *SMCMSIFan::probe(IOService *provider, SInt32 *score) {
+    if (checkKernelArgument("-smcmsifan.off")) {
+        SYSLOG("msifan", "disabled by -smcmsifan.off");
+        return nullptr;
+    }
+    return IOService::probe(provider, score);
+}
 
-PluginConfiguration ADDPR(config) = {
-    xStringify(PRODUCT_NAME),
-    parseModuleVersion("1.0.0"),
-    LiluAPI::AllowNormal | LiluAPI::AllowInstallerRecovery,
-    bootargOff,   arrsize(bootargOff),
-    bootargDebug, arrsize(bootargDebug),
-    bootargBeta,  arrsize(bootargBeta),
-    KernelVersion::Sonoma,
-    KernelVersion::Tahoe,
-    []() { SMCMSIFan::pluginStart(); }
-};
+bool SMCMSIFan::start(IOService *provider) {
+    if (!IOService::start(provider)) {
+        SYSLOG("msifan", "failed to start the parent");
+        return false;
+    }
 
-// ---------------------------------------------------------------------------
-// Static members
-// ---------------------------------------------------------------------------
+    setProperty("VersionInfo", kextVersion);
 
-IOLock                 *SMCMSIFan::ecLock      = nullptr;
-VirtualSMCAPI::Plugin   SMCMSIFan::vsmcPlugin  {};
+    readRegsSymbol = OSSymbol::withCString(kMSIECReadRegistersFunction);
+    if (!readRegsSymbol) {
+        SYSLOG("msifan", "failed to create function symbol");
+        return false;
+    }
 
-// ---------------------------------------------------------------------------
-// pluginStart — Lilu entry point
-// ---------------------------------------------------------------------------
-
-void SMCMSIFan::pluginStart() {
-    DBGLOG("SMCMSIFan", "pluginStart");
-    ecLock = IOLockAlloc();
-    if (!ecLock) { DBGLOG("SMCMSIFan", "IOLockAlloc ecLock failed"); return; }
-
-    // Keys must be registered in strictly ascending uint32_t order.
-    // VirtualSMCAPI::addKey() inserts into a sorted array; out-of-order
-    // insertions cause a registration failure at boot.
-    //
-    // SmcKeyTypeFpe2 = 0x66706532 ('fpe2') — defined in SMCMSIFanKeys.h
-    // if absent from kern_smcinfo.hpp.
-    //
-    // sortPlugin / registerPlugin do not exist in this SDK:
-    //   - keys are already sorted at insertion time
-    //   - registration happens via the ADDPR(vsmcPlugin) export below
-
-    // F0Ac — current RPM, re-read on every SMC request via SMCFanRPMValue
+    // Keys must be added in strictly ascending order (sorted key storage).
     VirtualSMCAPI::addKey(KeyF0Ac, vsmcPlugin.data,
-        VirtualSMCAPI::valueWithFp(
-            kSMCFanMinRPM,
-            SmcKeyTypeFpe2,
-            new SMCFanRPMValue(),
-            SMC_KEY_ATTRIBUTE_READ));
-
-    // F0Mn — minimum RPM (static)
+        VirtualSMCAPI::valueWithFp(0, SmcKeyTypeFpe2, new SMCFanRPMValue, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyF0Mn, vsmcPlugin.data,
-        VirtualSMCAPI::valueWithFp(
-            kSMCFanMinRPM,
-            SmcKeyTypeFpe2,
-            nullptr,
-            SMC_KEY_ATTRIBUTE_READ));
-
-    // F0Mx — maximum RPM (static)
+        VirtualSMCAPI::valueWithFp(kSMCFanMinRPM, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyF0Mx, vsmcPlugin.data,
-        VirtualSMCAPI::valueWithFp(
-            kSMCFanMaxRPM,
-            SmcKeyTypeFpe2,
-            nullptr,
-            SMC_KEY_ATTRIBUTE_READ));
-
-    // FNum — number of fans (1 on A10M)
+        VirtualSMCAPI::valueWithFp(kSMCFanMaxRPM, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyFNum, vsmcPlugin.data,
         VirtualSMCAPI::valueWithUint8(1));
-
-    // TC0P — CPU package temperature (sp78, dynamic read from EC 0x68)
+    // TG0P returns 0 when the iGPU is idle (normal at rest on A10M)
     VirtualSMCAPI::addKey(KeyTC0P, vsmcPlugin.data,
-        VirtualSMCAPI::valueWithSp(
-            0,
-            SmcKeyTypeSp78,
-            new SMCCpuTempValue(),
-            SMC_KEY_ATTRIBUTE_READ));
-
-    // TG0P — integrated GPU temperature (sp78, dynamic read from EC 0x80)
-    // Returns 0 when the iGPU is idle (normal at rest on A10M)
+        VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new SMCCpuTempValue, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyTG0P, vsmcPlugin.data,
-        VirtualSMCAPI::valueWithSp(
-            0,
-            SmcKeyTypeSp78,
-            new SMCGpuTempValue(),
-            SMC_KEY_ATTRIBUTE_READ));
+        VirtualSMCAPI::valueWithSp(0, SmcKeyTypeSp78, new SMCGpuTempValue, SMC_KEY_ATTRIBUTE_READ));
 
-    DBGLOG("SMCMSIFan", "SMC keys registered: F0Ac/Mn/Mx/FNum/TC0P/TG0P");
-}
-
-// VirtualSMC discovers this plugin via the global ADDPR(vsmcPlugin) symbol.
-// Lilu (plugin_start.hpp) scans loaded kexts for this symbol.
-// Must be exported as a value (not a pointer) — VirtualSMC dereferences
-// the struct directly; exporting a pointer would produce an invalid read.
-EXPORT VirtualSMCAPI::Plugin ADDPR(vsmcPlugin) {};  // filled by pluginStart()
-
-// ---------------------------------------------------------------------------
-// EC I/O helpers
-// Duplicated from MSIECToolbox.cpp intentionally — SMCMSIFan must remain
-// an independent kext with no runtime dependency on MSIECToolbox symbols.
-// ---------------------------------------------------------------------------
-
-bool SMCMSIFan::ecWaitIBF() {
-    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 x 10us)
-        uint8_t status;
-        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
-        if (!(status & 0x02)) return true;
-        IODelay(10);
+    vsmcNotifier = VirtualSMCAPI::registerHandler(vsmcNotificationHandler, this);
+    if (!vsmcNotifier) {
+        SYSLOG("msifan", "failed to register VirtualSMC handler");
+        return false;
     }
-    DBGLOG("SMCMSIFan", "ecWaitIBF: timeout (10ms)");
-    return false;
+    return true;
 }
 
-bool SMCMSIFan::ecWaitOBF() {
-    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 x 10us)
-        uint8_t status;
-        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
-        if (status & 0x01) return true;
-        IODelay(10);
+bool SMCMSIFan::vsmcNotificationHandler(void *sensors, void *refCon,
+                                        IOService *vsmc, IONotifier *notifier) {
+    if (!sensors || !vsmc) {
+        SYSLOG("msifan", "got null vsmc notification");
+        return false;
     }
-    DBGLOG("SMCMSIFan", "ecWaitOBF: timeout (10ms)");
-    return false;
+
+    auto self = static_cast<SMCMSIFan *>(sensors);
+    auto ret = vsmc->callPlatformFunction(VirtualSMCAPI::SubmitPlugin, true,
+                                          sensors, &self->vsmcPlugin, nullptr, nullptr);
+    if (ret == kIOReturnUnsupported) {
+        DBGLOG("msifan", "plugin submission to non vsmc");
+        return false;
+    }
+    if (ret != kIOReturnSuccess) {
+        SYSLOG("msifan", "plugin submission failure %X", ret);
+        return false;
+    }
+    DBGLOG("msifan", "submitted plugin");
+
+    // Dedicated workloop: a refresh may wait on the EC bus / ACPI global lock,
+    // which must not stall the shared platform workloop that IOResources
+    // clients get from getWorkLoop().
+    self->workloop = IOWorkLoop::workLoop();
+    self->poller = IOTimerEventSource::timerEventSource(self,
+        [](OSObject *object, IOTimerEventSource *) {
+            auto fan = OSDynamicCast(SMCMSIFan, object);
+            if (fan) fan->refreshSensors();
+        });
+
+    if (!self->workloop || !self->poller) {
+        SYSLOG("msifan", "failed to create poller or workloop");
+        return false;
+    }
+    if (self->workloop->addEventSource(self->poller) != kIOReturnSuccess) {
+        SYSLOG("msifan", "failed to add timer event source to workloop");
+        OSSafeReleaseNULL(self->poller);
+        return false;
+    }
+
+    // First sample right away so keys are not stuck at 0 for a second.
+    self->poller->setTimeoutMS(1);
+    return true;
 }
 
-IOReturn SMCMSIFan::ecRead(uint32_t offset, uint8_t &outVal) {
-    if (!ecLock) return kIOReturnNotReady;
-    IOLockLock(ecLock);
-
-    IOReturn ret = kIOReturnSuccess;
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)offset), "Nd"(kECDataPort));
-    if (!ecWaitOBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("inb %1, %0" : "=a"(outVal) : "Nd"(kECDataPort));
-
-done:
-    IOLockUnlock(ecLock);
-    return ret;
-}
-
-// ---------------------------------------------------------------------------
-// readCpuRPM — reads EC 0xCC-0xCD and applies the ISW formula
-// Both bytes are read under a single ecLock to prevent interleaving with
-// other EC accesses, which would produce an inconsistent hi/lo pair.
-// Returns 0 on timeout (fan stopped or EC unavailable).
-// ---------------------------------------------------------------------------
-
-uint16_t SMCMSIFan::readCpuRPM() {
-    if (!ecLock) return 0;
-    IOLockLock(ecLock);
-
-    uint8_t hi = 0, lo = 0;
-    IOReturn ret = kIOReturnSuccess;
-
-    // Read 0xCC (high byte) — ecLock held
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)0xCC), "Nd"(kECDataPort));
-    if (!ecWaitOBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("inb %1, %0" : "=a"(hi) : "Nd"(kECDataPort));
-
-    // Read 0xCD (low byte) — ecLock still held
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)0xCD), "Nd"(kECDataPort));
-    if (!ecWaitOBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("inb %1, %0" : "=a"(lo) : "Nd"(kECDataPort));
-
-done:
-    IOLockUnlock(ecLock);
-    if (ret != kIOReturnSuccess) return 0;
-
-    uint16_t val = ((uint16_t)hi << 8) | lo;
-    if (val == 0)  return 0;
-    if (val > 325) val = 325;
-    return (uint16_t)(((325 - val) * 16) + 1480);
+void SMCMSIFan::stop(IOService *provider) {
+    // kern_stop refuses unloading and VirtualSMC keeps our key values, so
+    // stop() only has to halt polling.
+    if (poller) {
+        poller->cancelTimeout();
+        if (workloop) workloop->removeEventSource(poller);
+        OSSafeReleaseNULL(poller);
+    }
+    OSSafeReleaseNULL(workloop);
+    if (vsmcNotifier) {
+        vsmcNotifier->remove();
+        vsmcNotifier = nullptr;
+    }
+    OSSafeReleaseNULL(ecService);
+    OSSafeReleaseNULL(readRegsSymbol);
+    IOService::stop(provider);
 }
 
 // ---------------------------------------------------------------------------
-// SMC value readValue() implementations
-// VirtualSMC calls these on every userspace SMC key read request.
+// refreshSensors — runs on the workloop every PollIntervalMS
+//
+// The EC is never touched directly: MSIECToolboxDriver owns the bus lock
+// (and the ACPI global lock), and serves batched reads through
+// callPlatformFunction. Reading the 4 registers in one batch also keeps the
+// RPM hi/lo bytes consistent.
 // ---------------------------------------------------------------------------
 
-SMC_RESULT SMCFanRPMValue::readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src) {
-    // fpe2 big-endian: stored value = RPM * 4
-    uint16_t rpm = SMCMSIFan::readCpuRPM();
-    *reinterpret_cast<uint16_t *>(data) = encodeFpe2(rpm);
+void SMCMSIFan::refreshSensors() {
+    if (!ecService) {
+        // MSIECToolbox may start after us: look it up again on each tick.
+        auto match = IOService::serviceMatching("MSIECToolboxDriver");
+        if (match) {
+            ecService = IOService::copyMatchingService(match);
+            match->release();
+        }
+        if (!ecService)
+            DBGLOG("msifan", "MSIECToolboxDriver not available yet");
+    }
+
+    if (ecService) {
+        static const uint8_t offsets[4] = {
+            kMSI_EC_CPU_TEMP_ADDR, kMSI_EC_GPU_TEMP_ADDR,
+            kMSI_EC_FAN_CPU_HI,    kMSI_EC_FAN_CPU_LO,
+        };
+        uint8_t v[4] = {};
+        IOReturn r = ecService->callPlatformFunction(readRegsSymbol, false,
+                         const_cast<uint8_t *>(offsets), v,
+                         reinterpret_cast<void *>(static_cast<uintptr_t>(4)), nullptr);
+        if (r == kIOReturnSuccess) {
+            atomic_store_explicit(&cpuTempC, v[0], memory_order_relaxed);
+            atomic_store_explicit(&gpuTempC, v[1], memory_order_relaxed);
+            atomic_store_explicit(&cpuRPM, msiECToRPM(v[2], v[3]), memory_order_relaxed);
+        } else {
+            // Keep the previous sample: one EC timeout should not make the
+            // fan look stopped.
+            DBGLOG("msifan", "EC read failed 0x%08X", r);
+        }
+    }
+
+    poller->setTimeoutMS(PollIntervalMS);
+}
+
+// ---------------------------------------------------------------------------
+// SMC value readAccess() implementations — cache only
+// ---------------------------------------------------------------------------
+
+SMC_RESULT SMCFanRPMValue::readAccess() {
+    uint16_t rpm = atomic_load_explicit(&SMCMSIFan::cpuRPM, memory_order_relaxed);
+    *reinterpret_cast<uint16_t *>(data) = VirtualSMCAPI::encodeIntFp(SmcKeyTypeFpe2, rpm);
     return SmcSuccess;
 }
 
-// readCpuTemp / readGpuTemp delegate to ecRead() which holds ecLock.
-// No additional locking needed here.
-
-uint8_t SMCMSIFan::readCpuTemp() {
-    uint8_t val = 0;
-    ecRead(0x68, val);
-    DBGLOG("SMCMSIFan", "readCpuTemp: %d C", val);
-    return val;
-}
-
-uint8_t SMCMSIFan::readGpuTemp() {
-    uint8_t val = 0;
-    ecRead(0x80, val);
-    DBGLOG("SMCMSIFan", "readGpuTemp: %d C", val);
-    return val;
-}
-
-// TC0P — CPU package temperature (sp78 big-endian: stored = T * 256)
-SMC_RESULT SMCCpuTempValue::readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src) {
-    uint8_t temp = SMCMSIFan::readCpuTemp();
-    *reinterpret_cast<uint16_t *>(data) = encodeSp78(temp);
+SMC_RESULT SMCCpuTempValue::readAccess() {
+    uint8_t t = atomic_load_explicit(&SMCMSIFan::cpuTempC, memory_order_relaxed);
+    *reinterpret_cast<uint16_t *>(data) = VirtualSMCAPI::encodeIntSp(SmcKeyTypeSp78, t);
     return SmcSuccess;
 }
 
-// TG0P — integrated GPU temperature (sp78)
-SMC_RESULT SMCGpuTempValue::readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src) {
-    uint8_t temp = SMCMSIFan::readGpuTemp();
-    *reinterpret_cast<uint16_t *>(data) = encodeSp78(temp);
+SMC_RESULT SMCGpuTempValue::readAccess() {
+    uint8_t t = atomic_load_explicit(&SMCMSIFan::gpuTempC, memory_order_relaxed);
+    *reinterpret_cast<uint16_t *>(data) = VirtualSMCAPI::encodeIntSp(SmcKeyTypeSp78, t);
     return SmcSuccess;
+}
+
+// ---------------------------------------------------------------------------
+// kmod entry points (MODULE_START / MODULE_STOP)
+// ---------------------------------------------------------------------------
+
+EXPORT extern "C" kern_return_t ADDPR(kern_start)(kmod_info_t *, void *) {
+    lilu_get_boot_args("liludelay", &ADDPR(debugPrintDelay), sizeof(ADDPR(debugPrintDelay)));
+    ADDPR(debugEnabled) = checkKernelArgument("-smcmsifan.dbg") ||
+                          checkKernelArgument("-vsmcdbg") ||
+                          checkKernelArgument("-liludbgall");
+    return KERN_SUCCESS;
+}
+
+EXPORT extern "C" kern_return_t ADDPR(kern_stop)(kmod_info_t *, void *) {
+    // VirtualSMC keeps pointers to our key values: never unload.
+    return KERN_FAILURE;
 }

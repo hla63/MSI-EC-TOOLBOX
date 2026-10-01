@@ -270,6 +270,18 @@ struct MSIFanCurve {
 } __attribute__((packed));
 
 // ---------------------------------------------------------------------------
+// Kernel-to-kernel interface: SMCMSIFan reads the EC through
+// MSIECToolboxDriver::callPlatformFunction() so that both kexts share one
+// bus lock. No symbol is linked across kexts.
+//   param1: const uint8_t *offsets
+//   param2: uint8_t       *values  (same length as offsets)
+//   param3: (void *)(uintptr_t) count, 1..kMSIECMaxBatchRead
+//   param4: unused
+// ---------------------------------------------------------------------------
+#define kMSIECReadRegistersFunction "MSIECReadRegisters"
+static constexpr uint32_t kMSIECMaxBatchRead = 16;
+
+// ---------------------------------------------------------------------------
 // ISW RPM formula
 // val = big-endian 16-bit register (EC 0xCC-0xCD for CPU fan)
 // RPM = ((325 - val) * 16) + 1480  when val != 0, else 0 (fan stopped)

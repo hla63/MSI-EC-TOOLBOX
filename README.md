@@ -272,9 +272,9 @@ Boot OpenCore
      └─ MSIECToolbox.kext loaded
          └─ pluginStart() → hook IOACPIPlatformDevice::writeECField
          └─ MSIECToolboxDriver (IOService) published → UserClient available
-     └─ SMCMSIFan.kext loaded
-         └─ F0Ac / FNum / F0Mn / F0Mx published in VirtualSMC
-         └─ readCpuRPM() called on every SMC read
+     └─ SMCMSIFan.kext loaded (VirtualSMC plugin)
+         └─ F0Ac / FNum / F0Mn / F0Mx / TC0P / TG0P published in VirtualSMC
+         └─ EC sampled every 1s through MSIECToolboxDriver (shared EC lock), SMC reads return the cache
 
 Login
  └─ LaunchAgent started via com.msi.MSIECToolboxAgent.plist

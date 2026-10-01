@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0E177F38411E42B1C636FFF0 /* libkmod.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A00920DDB1E6561FA054B58 /* libkmod.a */; };
+		677092A49A4B348D9C937FB9 /* plugin_start.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA926654729B5567C728CB9E /* plugin_start.cpp */; };
 		2DA8FE4967B54020B7F93AEE /* MSIECToolbox.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 018023DC8FB940F9AE582853; };
 		BF4B2981B8254FF1B2A4EF30 /* MSIECToolboxDriver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CD8C86F6AB084D2DB5964692; };
 		0D15F4D7090240298A5B9D61 /* MSIECToolboxUserClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AAF3C0B797424C40933967F1; };
@@ -17,6 +19,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		8A00920DDB1E6561FA054B58 /* libkmod.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libkmod.a; path = ../MacKernelSDK/Library/x86_64/libkmod.a; sourceTree = SOURCE_ROOT; };
+		AA926654729B5567C728CB9E /* plugin_start.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = plugin_start.cpp; path = ../Lilu.kext/Contents/Resources/Library/plugin_start.cpp; sourceTree = SOURCE_ROOT; };
 		A2D1DE5C0FAE46ACB7CC88DC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Sources/Info.plist; sourceTree = "<group>"; };
 		D0708B59666544298871D702 /* MSIECToolbox.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MSIECToolbox.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		018023DC8FB940F9AE582853 /* MSIECToolbox.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = MSIECToolbox.cpp; path = Sources/MSIECToolbox.cpp; sourceTree = "<group>"; };
@@ -33,6 +37,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0E177F38411E42B1C636FFF0 /* libkmod.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -42,6 +47,7 @@
 		A4D1AF694AB74681A830AD50 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				AA926654729B5567C728CB9E /* plugin_start.cpp */,
 				018023DC8FB940F9AE582853 /* MSIECToolbox.cpp */,
 				CD8C86F6AB084D2DB5964692 /* MSIECToolboxDriver.cpp */,
 				AAF3C0B797424C40933967F1 /* MSIECToolboxUserClient.cpp */,
@@ -74,6 +80,7 @@
 				A4D1AF694AB74681A830AD50 /* Sources */,
 				B9E0AFB5703441479DA29CD0 /* Headers */,
 				A2D1DE5C0FAE46ACB7CC88DC /* Info.plist */,
+				8A00920DDB1E6561FA054B58 /* libkmod.a */,
 				0CB4FC992AC34071AC5399D4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -150,6 +157,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				677092A49A4B348D9C937FB9 /* plugin_start.cpp in Sources */,
 				2DA8FE4967B54020B7F93AEE /* MSIECToolbox.cpp in Sources */,
 				BF4B2981B8254FF1B2A4EF30 /* MSIECToolboxDriver.cpp in Sources */,
 				0D15F4D7090240298A5B9D61 /* MSIECToolboxUserClient.cpp in Sources */,
@@ -189,6 +197,10 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				ARCHS = x86_64;
+				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				MODULE_VERSION = 5.2.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 			};
@@ -217,6 +229,10 @@
 					"$(SRCROOT)/../Lilu.kext/Contents/Resources",
 				);
 				MTL_FAST_MATH = YES;
+				ARCHS = x86_64;
+				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
+				MODULE_VERSION = 5.2.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				VALIDATE_PRODUCT = YES;
@@ -228,10 +244,26 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
 				INFOPLIST_FILE = Sources/Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
-				KERNEL_FRAMEWORK_HEADERS = YES;
+				GCC_ENABLE_KERNEL_DEVELOPMENT = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"MODULE_VERSION=$(MODULE_VERSION)",
+					"PRODUCT_NAME=$(PRODUCT_NAME)",
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Library/x86_64",
+				);
+				MODULE_NAME = com.msi.MSIECToolbox;
+				MODULE_START = "$(PRODUCT_NAME)_kern_start";
+				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-static",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.msi.MSIECToolbox;
 				PRODUCT_NAME = MSIECToolbox;
 				SKIP_INSTALL = YES;
@@ -244,10 +276,26 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
 				INFOPLIST_FILE = Sources/Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
-				KERNEL_FRAMEWORK_HEADERS = YES;
+				GCC_ENABLE_KERNEL_DEVELOPMENT = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"MODULE_VERSION=$(MODULE_VERSION)",
+					"PRODUCT_NAME=$(PRODUCT_NAME)",
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../MacKernelSDK/Library/x86_64",
+				);
+				MODULE_NAME = com.msi.MSIECToolbox;
+				MODULE_START = "$(PRODUCT_NAME)_kern_start";
+				MODULE_STOP = "$(PRODUCT_NAME)_kern_stop";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-static",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.msi.MSIECToolbox;
 				PRODUCT_NAME = MSIECToolbox;
 				SKIP_INSTALL = YES;
