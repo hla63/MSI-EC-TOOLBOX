@@ -26,6 +26,7 @@ uint32_t ADDPR(debugPrintDelay) = 0;
 
 _Atomic(uint16_t) SMCMSIFan::cpuRPM   = 0;
 _Atomic(uint8_t)  SMCMSIFan::gpuTempC = 0;
+_Atomic(uint8_t)  SMCMSIFan::fanForced = 0;
 
 // ---------------------------------------------------------------------------
 // IOService lifecycle
@@ -56,6 +57,14 @@ bool SMCMSIFan::start(IOService *provider) {
     // Keys must be added in strictly ascending order (sorted key storage).
     VirtualSMCAPI::addKey(KeyF0Ac, vsmcPlugin.data,
         VirtualSMCAPI::valueWithFp(0, SmcKeyTypeFpe2, new SMCFanRPMValue, SMC_KEY_ATTRIBUTE_READ));
+    const MSIFanDescription fanDesc;
+    VirtualSMCAPI::addKey(KeyF0ID, vsmcPlugin.data,
+        VirtualSMCAPI::valueWithData(reinterpret_cast<const SMC_DATA *>(&fanDesc), sizeof(fanDesc),
+                                     SmcKeyTypeFds, nullptr, SMC_KEY_ATTRIBUTE_CONST | SMC_KEY_ATTRIBUTE_READ));
+    // Read-only: fan speed is controlled by the agent's modes and curve,
+    // never by SMC clients.
+    VirtualSMCAPI::addKey(KeyF0Md, vsmcPlugin.data,
+        VirtualSMCAPI::valueWithUint8(0, new SMCFanModeValue, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyF0Mn, vsmcPlugin.data,
         VirtualSMCAPI::valueWithFp(kSMCFanMinRPM, SmcKeyTypeFpe2, nullptr, SMC_KEY_ATTRIBUTE_READ));
     VirtualSMCAPI::addKey(KeyF0Mx, vsmcPlugin.data,
@@ -159,16 +168,19 @@ void SMCMSIFan::refreshSensors() {
     }
 
     if (ecService) {
-        static const uint8_t offsets[3] = {
+        static const uint8_t offsets[4] = {
             kMSI_EC_GPU_TEMP_ADDR, kMSI_EC_FAN_CPU_HI, kMSI_EC_FAN_CPU_LO,
+            kMSI_EC_COOLER_BOOST_ADDR,
         };
-        uint8_t v[3] = {};
+        uint8_t v[4] = {};
         IOReturn r = ecService->callPlatformFunction(readRegsSymbol, false,
                          const_cast<uint8_t *>(offsets), v,
-                         reinterpret_cast<void *>(static_cast<uintptr_t>(3)), nullptr);
+                         reinterpret_cast<void *>(static_cast<uintptr_t>(4)), nullptr);
         if (r == kIOReturnSuccess) {
             atomic_store_explicit(&gpuTempC, v[0], memory_order_relaxed);
             atomic_store_explicit(&cpuRPM, msiECToRPM(v[1], v[2]), memory_order_relaxed);
+            atomic_store_explicit(&fanForced,
+                                  (v[3] & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0, memory_order_relaxed);
         } else {
             // Keep the previous sample: one EC timeout should not make the
             // fan look stopped.
@@ -186,6 +198,11 @@ void SMCMSIFan::refreshSensors() {
 SMC_RESULT SMCFanRPMValue::readAccess() {
     uint16_t rpm = atomic_load_explicit(&SMCMSIFan::cpuRPM, memory_order_relaxed);
     *reinterpret_cast<uint16_t *>(data) = VirtualSMCAPI::encodeIntFp(SmcKeyTypeFpe2, rpm);
+    return SmcSuccess;
+}
+
+SMC_RESULT SMCFanModeValue::readAccess() {
+    *reinterpret_cast<uint8_t *>(data) = atomic_load_explicit(&SMCMSIFan::fanForced, memory_order_relaxed);
     return SmcSuccess;
 }
 
