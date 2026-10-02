@@ -228,15 +228,6 @@ func renderLegend(_ data: [UInt8]) -> String {
 }
 
 func renderJSON(_ data: [UInt8]) -> String {
-    var dict: [String: Any] = [:]
-    for i in 0..<256 {
-        let key = String(format: "0x%02X", i)
-        if let info = knownRegisters[i] {
-            dict[key] = ["value": data[i], "name": info.name, "desc": info.desc]
-        } else {
-            dict[key] = ["value": data[i]]
-        }
-    }
     let arr = (0..<256).map { i -> [String: Any] in
         var entry: [String: Any] = ["offset": i, "value": data[i],
                                     "hex": String(format: "0x%02X", data[i])]
