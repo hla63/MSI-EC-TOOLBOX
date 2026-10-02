@@ -94,6 +94,8 @@ brew install acpica     # provides iasl
 iasl -ve ACPI/SSDT-MSI-KEY_FIX.dsl   # → SSDT-MSI-KEY_FIX.aml
 ```
 
+The `.dsl` must stay **pure ASCII, comments in English**: macOS `iasl` rejects a source containing non-ASCII characters (accents, arrows, em dashes) with `Input file does not appear to be an ASL or data table source file`. Check with `grep -nP '[^\x00-\x7F]' ACPI/*.dsl` (no output expected).
+
 ## Architecture — Cross-Component Data Flow
 
 ```

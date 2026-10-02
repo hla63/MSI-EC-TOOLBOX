@@ -1,24 +1,30 @@
 /*
- * SSDT-MSI-KEY_FIX v4
+ * SSDT-MSI-KEY_FIX v5 - MSI Modern 15 A10M, VoodooPS2Controller key remap
  *
- * e077 → ADB 6b (brightness down)
- * e078 → ADB 71 (brightness up)
- * e071 → ADB 4f (keycode 79)  = F5 mute mic    → CGEventTap agent
- * e072 → ADB 6f (keycode 111) = F12 rotation   → CGEventTap agent
- * e06e → ADB 50 (keycode 80)  = F6 caméra      → CGEventTap agent
- *   76 → ADB 5a (keycode 90)  = F4 trackpad    → CGEventTap agent
+ * Keep this file pure ASCII and comments in English: macOS iasl rejects
+ * sources with non-ASCII characters ("Input file does not appear to be an
+ * ASL or data table source file").
  *
- * v4: the camera key used ADB 0x76 (keycode 118), which is also the
- * standard F4: Fn+F4 toggled the camera. ADB 0x50 (F19) is unused.
- * v5: the MSI F4 hotkey sends Ctrl + Win + F24 (the Windows touchpad toggle);
- * F24 is PS2 scancode 0x76, unmapped in VoodooPS2 (ADB 0x80 = dropped).
- * Mapped to ADB 0x5A (F20); the agent toggles the touchpad on keycode 90.
- * Keep the agent's k*KeyCode constants in sync with this table.
+ * PS2 scancode -> ADB code (macOS keycode)   key            handled by
+ *   e077 -> 6b                               brightness -   macOS
+ *   e078 -> 71                               brightness +   macOS
+ *   e071 -> 4f (79)                          F5 mic mute    agent CGEventTap
+ *   e072 -> 6f (111)                         F12 rotation   agent CGEventTap
+ *   e06e -> 50 (80, F19)                     F6 camera      agent CGEventTap
+ *   76   -> 5a (90, F20)                     F4 touchpad    agent CGEventTap
+ *   e037 -> PS2 64                           PrtSc          screenshot (F13)
+ * F8 (keyboard backlight) is the standard keycode 100, no remap needed.
  *
- * Adding an entry requires updating the Package (n) count above it; iasl
- * rejects a list longer than its declared length. Find scancodes with
+ * v4: the camera key used ADB 0x76 (keycode 118), which is also the standard
+ *     F4: Fn+F4 toggled the camera. ADB 0x50 (F19) is unused.
+ * v5: the MSI F4 hotkey sends Ctrl + Win + F24 (the Windows touchpad toggle).
+ *     F24 is PS2 scancode 0x76, unmapped in VoodooPS2 (ADB 0x80 = dropped);
+ *     mapped to ADB 0x5A (F20).
+ *
+ * Keep the agent's k*KeyCode constants in sync with this table. Adding an
+ * entry requires updating the Package (n) count above it: iasl rejects a
+ * list longer than its declared length. Find unknown scancodes with
  * VoodooPS2's LogScanCodes property (sudo dmesg | grep "sending key").
- * F8 (rétroéclairage) est intercepté via keycode standard 100 dans l'agent.
  */
 DefinitionBlock ("", "SSDT", 2, "hack", "ps2", 0x00000000)
 {
@@ -44,10 +50,10 @@ DefinitionBlock ("", "SSDT", 2, "hack", "ps2", 0x00000000)
                     Package (0x00){},
                     "e077=6b",
                     "e078=71",
-                    "e071=4f",   /* F5 mute mic    → ADB F14 (keycode 79)  */
-                    "e072=6f",   /* F12 rotation   → ADB F13 (keycode 111) */
-                    "e06e=50",   /* F6 caméra      → ADB F19 (keycode 80)  */
-                    "76=5a"      /* F4 trackpad (Ctrl+Win+F24) → ADB F20 (keycode 90) */
+                    "e071=4f",   /* F5 mic mute  -> ADB F18 (keycode 79)  */
+                    "e072=6f",   /* F12 rotation -> ADB F12 (keycode 111) */
+                    "e06e=50",   /* F6 camera    -> ADB F19 (keycode 80)  */
+                    "76=5a"      /* F4 touchpad (Ctrl+Win+F24) -> ADB F20 (keycode 90) */
                 }
             }
         })
