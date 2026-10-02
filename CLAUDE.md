@@ -114,7 +114,7 @@ Login
   LaunchAgent (com.msi.MSIECToolboxAgent)
     IOKit open MSIECToolboxDriver → UserClient (16 selectors)
     CoreAudio listener → system mute changes → selector setMuteState → EC 0x2B/0x2C (LED bit 0x04)
-    CGEventTap (requires Accessibility) → keycodes 79/111/118/100 → direct actions
+    CGEventTap (requires Accessibility) → keycodes 79/111/80/100 → direct actions
     500ms poll → selectors 4 (getAllState), 11 (getKbBacklight), 9 (getSystemState)
     2s timer   → selector 5 (readFanRPM)
 ```
@@ -124,6 +124,10 @@ Login
 **CGEventTap health**: macOS disables the tap when the main run loop is too slow (e.g. during a display reconfiguration — rotating to 90°/270°) or on Secure Input, and only reports it with the next event, which is then lost. `MuteObserver` re-enables it on `NSApplication.didChangeScreenParametersNotification` and from a 2 s watchdog, which also shows the menu warning (`setAccessibilityWarning`) when `AXIsProcessTrusted()` is false — the case after a re-signature, where the Accessibility entry looks checked but must be removed and re-added.
 
 **Display rotation (F12)**: `CGDisplayRotation` of the built-in panel is the only source of truth — the next angle is computed from it and the menu item is refreshed from it (at launch, after each rotation, on `didChangeScreenParametersNotification`). Never trust the displayplacer exit code: it rotates first, then looks up `res:` in the *new* orientation (portrait = `1080x1920`), so a resolution miss returns 1 although the screen turned; `res:` cannot be omitted either (width/height are uninitialised without it). One rotation at a time (`rotationInProgress`): presses during a rotation, including auto-repeat, are ignored.
+
+**Keyboard map (SSDT ↔ agent)**: the SSDT maps MSI hotkey scancodes to ADB codes and the agent intercepts the resulting keycodes: `e071`→`0x4F` (79, mic), `e072`→`0x6F` (111, rotation), `e06e`→`0x50` (80, F19, camera), plus the standard F8 (100, backlight). An ADB code shared with a standard key is intercepted for both: the camera used `0x76` (118 = standard F4) until v4 of the SSDT, so Fn+F4 toggled the camera. Change SSDT values only, never the number of entries (RMCF parsing), and keep the agent's `kF*KeyCode` constants in sync. To identify an unknown key: `defaults write MSIECToolboxAgent debug_keys -bool true`, restart the agent, read `[debug_keys]` lines in the log, then turn it off — it logs every keystroke.
+
+**Touchpad (selector 16)**: not an EC register. The kext relays VoodooPS2's keyboard→touchpad messages (`iokit_vendor_specific_msg(100)` set, `101` get, data `bool*`) to every service with `RM,deliverNotifications = true` — VoodooI2CHID's `VoodooI2CMultitouchHIDEventDriver` and the VoodooPS2 trackpads handle them. The menu item "Trackpad" toggles it; the MSI F4 hotkey is not bound yet (its code is unknown).
 
 **Mute sync direction**: CoreAudio is the source of truth. EC → CoreAudio only propagates *muting*; if the EC LED reads unmuted while the agent last sent muted, the agent rewrites the LED instead of unmuting CoreAudio (any local process can write the LED bits through the kext).
 
@@ -148,7 +152,7 @@ Login
 **Mute LEDs**: `setMuteState` always writes the LED bit (0x04 of 0x2B/0x2C) with a read-modify-write, whether or not the hook is installed. The hook only re-applies the bit when firmware rewrites those registers; without the direct write the agent's 500 ms poll would read the old bit and revert the CoreAudio mute.
 
 **UserClient selectors** (defined in `MSIECToolboxShared.h`, dispatched in `MSIECToolboxUserClient.cpp`):
-0=setMuteState, 1=getMuteState (reserved, superseded by 4), 2=dumpEC, 3=setCameraState, 4=getAllState, 5=readFanRPM, 6=setFanMode, 7=setCoolerBoost, 8=setShiftMode, 9=getSystemState, 10=setKbBacklight, 11=getKbBacklight, 12=setBatteryCharge, 13=getBatteryCharge, 14=setFanCurve, 15=getFanCurve
+0=setMuteState, 1=getMuteState (reserved, superseded by 4), 2=dumpEC, 3=setCameraState, 4=getAllState, 5=readFanRPM, 6=setFanMode, 7=setCoolerBoost, 8=setShiftMode, 9=getSystemState, 10=setKbBacklight, 11=getKbBacklight, 12=setBatteryCharge, 13=getBatteryCharge, 14=setFanCurve, 15=getFanCurve, 16=setTouchpad
 
 ## EC Register Reference (CONF_G1_5)
 

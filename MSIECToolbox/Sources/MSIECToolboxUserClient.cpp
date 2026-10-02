@@ -104,6 +104,11 @@ IOExternalMethodDispatch MSIECToolboxUserClient::sMethods[kMSISelectorCount] = {
         sActionGetFanCurve,
         0, 0, 0, sizeof(MSIFanCurve)
     },
+    // kMSISetTouchpad — input/output: MSITouchpadState
+    [kMSISetTouchpad] = {
+        sActionSetTouchpad,
+        0, sizeof(MSITouchpadState), 0, sizeof(MSITouchpadState)
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -386,4 +391,25 @@ IOReturn MSIECToolboxUserClient::sActionGetKbBacklight(
     auto *out = static_cast<MSIKbBacklightState *>(args->structureOutput);
     out->reserved[0] = out->reserved[1] = out->reserved[2] = 0;
     return MSIECCore::getKbBacklight(out->level);
+}
+
+// ---------------------------------------------------------------------------
+// sActionSetTouchpad — sélecteur 16
+// ---------------------------------------------------------------------------
+
+IOReturn MSIECToolboxUserClient::sActionSetTouchpad(
+    OSObject * /*target*/, void *, IOExternalMethodArguments *args)
+{
+    if (!args->structureInput  || args->structureInputSize  < sizeof(MSITouchpadState) ||
+        !args->structureOutput || args->structureOutputSize < sizeof(MSITouchpadState))
+        return kIOReturnBadArgument;
+    const auto *in  = static_cast<const MSITouchpadState *>(args->structureInput);
+    auto       *out = static_cast<MSITouchpadState *>(args->structureOutput);
+
+    bool enabled = true;
+    IOReturn r = MSIECCore::setTouchpad(in->request, enabled);
+    out->request     = in->request;
+    out->enabled     = enabled ? 1 : 0;
+    out->reserved[0] = out->reserved[1] = 0;
+    return r;
 }

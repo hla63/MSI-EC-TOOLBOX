@@ -40,6 +40,7 @@ enum MSIECToolboxSelector: UInt32 {
     case getBatteryCharge = 13
     case setFanCurve      = 14
     case getFanCurve      = 15
+    case setTouchpad      = 16  // MSITouchpadState in/out — relayed to VoodooI2C/VoodooPS2
 }
 
 enum FanMode: UInt8 {
@@ -144,6 +145,18 @@ struct MSIFanCurve {
     var speedsArray: [UInt8] { [speeds.0, speeds.1, speeds.2, speeds.3, speeds.4, speeds.5] }
 }
 
+// Mirror of MSITouchpadState / kMSITouchpad* (MSIECToolboxShared.h)
+struct MSITouchpadState {
+    var request:   UInt8
+    var enabled:   UInt8 = 0
+    var reserved0: UInt8 = 0
+    var reserved1: UInt8 = 0
+}
+
+enum TouchpadRequest: UInt8 {
+    case query = 0, disable = 1, enable = 2, toggle = 3
+}
+
 struct MSIKbBacklightState {
     var level:     UInt8
     var reserved0: UInt8 = 0
@@ -157,7 +170,7 @@ struct MSIKbBacklightState {
 
 private let kF14KeyCode: CGKeyCode = 79   // F5 mute mic    (e071→ADB 4f)
 private let kF13KeyCode: CGKeyCode = 111  // F12 rotation   (e072→ADB 6f)
-private let kF6KeyCode:  CGKeyCode = 118  // F6 caméra      (e06e→ADB 76)
+private let kF6KeyCode:  CGKeyCode = 80   // F6 caméra      (e06e→ADB 50, F19) — was 118 = standard F4
 private let kF8KeyCode:  CGKeyCode = 100  // F8 backlight   (keycode standard macOS)
 
 // ---------------------------------------------------------------------------
@@ -399,6 +412,27 @@ final class MSIECToolboxClient {
         return kr == KERN_SUCCESS
     }
 
+    /// Returns the touchpad state after the request, nil if the kext or the
+    /// touchpad driver is unavailable.
+    func setTouchpad(_ request: TouchpadRequest) -> Bool? {
+        guard isConnected else { return nil }
+        var input  = MSITouchpadState(request: request.rawValue)
+        var output = MSITouchpadState(request: 0)
+        var outSz  = MemoryLayout<MSITouchpadState>.size
+        let kr = withUnsafeBytes(of: &input) { inPtr in
+            withUnsafeMutableBytes(of: &output) { outPtr in
+                IOConnectCallStructMethod(connection, MSIECToolboxSelector.setTouchpad.rawValue,
+                    inPtr.baseAddress, MemoryLayout<MSITouchpadState>.size,
+                    outPtr.baseAddress, &outSz)
+            }
+        }
+        guard kr == KERN_SUCCESS else {
+            NSLog("[MSIECToolboxAgent] setTouchpad failed: 0x%08X", kr)
+            return nil
+        }
+        return output.enabled != 0
+    }
+
     func getFanCurve() -> MSIFanCurve? {
         guard isConnected else { return nil }
         var out   = MSIFanCurve()
@@ -515,6 +549,7 @@ final class MenuBarController {
     private var micItem:     NSMenuItem!
     private var speakerItem: NSMenuItem!
     private var camItem:     NSMenuItem!
+    private var trackpadItem: NSMenuItem!
     private var rotItem:     NSMenuItem!
     private var cpuFanItem:  NSMenuItem!
     private var gpuFanItem:  NSMenuItem!
@@ -583,6 +618,7 @@ final class MenuBarController {
     var onToggleMic:      (() -> Void)?
     var onToggleSpeaker:  (() -> Void)?
     var onToggleCamera:   (() -> Void)?
+    var onToggleTrackpad: (() -> Void)?
     var onToggleRotation: (() -> Void)?
     var onSetFanMode:     ((FanMode)   -> Void)?
     var onToggleCoolerBoost:  (() -> Void)?
@@ -644,6 +680,8 @@ final class MenuBarController {
         camItem     = makeItem(title: "Caméra : Active",    sfSymbol: "camera.fill",          action: #selector(tapCamera))
         rotItem     = makeItem(title: "Rotation : 0°",      sfSymbol: "rotate.right.fill",    action: #selector(tapRotation))
         camItem.isEnabled = true
+        trackpadItem = makeItem(title: "Trackpad : Actif", sfSymbol: "rectangle.and.hand.point.up.left.fill",
+                                action: #selector(tapTrackpad))
 
         // Fans + température (lecture seule)
         cpuFanItem = makeItem(title: "CPU Fan : — RPM", sfSymbol: "cpu", action: nil)
@@ -682,10 +720,11 @@ final class MenuBarController {
         menu.addItem(sepAfterAccessibility)
 
         // ── Assemblage du menu ───────────────────────────────────────────────
-        audioItems = [micItem, speakerItem, camItem]
+        audioItems = [micItem, speakerItem, camItem, trackpadItem]
         menu.addItem(micItem)
         menu.addItem(speakerItem)
         menu.addItem(camItem)
+        menu.addItem(trackpadItem)
         sepAfterAudio = NSMenuItem.separator()
         menu.addItem(sepAfterAudio)
         ecDumpItem = makeItem(title: "Table EC", sfSymbol: "tablecells", action: #selector(tapECDump))
@@ -954,6 +993,11 @@ final class MenuBarController {
         updateLED()
     }
 
+    func updateTrackpadItem(enabled: Bool) {
+        trackpadItem.title = enabled ? "Trackpad : Actif" : "Trackpad : Désactivé"
+        trackpadItem.image = sfImage("rectangle.and.hand.point.up.left.fill", muted: !enabled)
+    }
+
     func updateCameraItem(active: Bool) {
         cameraActive = active
         DispatchQueue.main.async {
@@ -1057,6 +1101,7 @@ final class MenuBarController {
     @objc private func tapMic()      { onToggleMic?() }
     @objc private func tapSpeaker()  { onToggleSpeaker?() }
     @objc private func tapCamera()   { onToggleCamera?() }
+    @objc private func tapTrackpad() { onToggleTrackpad?() }
     @objc private func tapRotation() { onToggleRotation?() }
     @objc private func tapFanAuto()      { onSetFanMode?(.auto_) }
     @objc private func tapFanSilent()    { onSetFanMode?(.silent) }
@@ -1272,6 +1317,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         menuBar.onToggleMic      = { [weak self] in self?.toggleMicMute() }
         menuBar.onToggleSpeaker  = { [weak self] in self?.toggleSpeakerMute() }
         menuBar.onToggleCamera   = { [weak self] in self?.toggleCameraState() }
+        menuBar.onToggleTrackpad = { [weak self] in self?.toggleTrackpad() }
         menuBar.onToggleRotation = { [weak self] in self?.toggleDisplayRotation() }
         menuBar.onSetFanMode     = { [weak self] mode   in self?.setFanMode(mode) }
         menuBar.onSetKbBacklight    = { [weak self] level  in self?.setKbBacklight(level) }
@@ -1281,13 +1327,14 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         menuBar.onOpenFanCurve       = { [weak self] in self?.openFanCurvePanel() }
         menuBar.onToggleCoolerBoost = { [weak self] in self?.toggleCoolerBoost() }
 
-        client.run({ c -> (kb: UInt8?, battery: UInt8?) in
+        client.run({ c -> (kb: UInt8?, battery: UInt8?, trackpad: Bool?) in
             _ = c.connect()
-            return (c.getKbBacklight(), c.getBatteryCharge())
+            return (c.getKbBacklight(), c.getBatteryCharge(), c.setTouchpad(.query))
         }) { [weak self] initial in
             guard let self = self else { return }
-            if let lvl = initial.kb      { self.menuBar.updateKbBacklightItems(level: lvl) }
-            if let pct = initial.battery { self.menuBar.updateBatteryLimitItem(percent: pct) }
+            if let lvl = initial.kb       { self.menuBar.updateKbBacklightItems(level: lvl) }
+            if let pct = initial.battery  { self.menuBar.updateBatteryLimitItem(percent: pct) }
+            if let on  = initial.trackpad { self.menuBar.updateTrackpadItem(enabled: on) }
             // Menu and LEDs follow CoreAudio from the start, not only after
             // its first change. Queued before the first poll, so the poll
             // reads the LEDs already written.
@@ -1363,7 +1410,9 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             tap:              .cghidEventTap,
             place:            .headInsertEventTap,
             options:          .defaultTap,
-            eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+            eventsOfInterest: debugKeys
+                ? CGEventMask(1 << CGEventType.keyDown.rawValue | 1 << CGEventType.flagsChanged.rawValue)
+                : CGEventMask(1 << CGEventType.keyDown.rawValue),
             callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
                 // macOS disables the tap on Secure Input (auth dialogs) or when
                 // the main run loop was too slow to answer (e.g. during a
@@ -1379,9 +1428,14 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                 // passUnretained : le callback ne possède pas l'événement —
                 // passRetained ajouterait un +1 jamais relâché (fuite d'un
                 // CGEvent par frappe clavier système).
+                let me = Unmanaged<MuteObserver>.fromOpaque(userInfo!).takeUnretainedValue()
+                if me.debugKeys {
+                    NSLog("[MSIECToolboxAgent] [debug_keys] type=%u keycode=%lld flags=0x%llX",
+                          type.rawValue, event.getIntegerValueField(.keyboardEventKeycode),
+                          event.flags.rawValue)
+                }
                 guard type == .keyDown else { return Unmanaged.passUnretained(event) }
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-                let me = Unmanaged<MuteObserver>.fromOpaque(userInfo!).takeUnretainedValue()
                 switch CGKeyCode(keyCode) {
                 case kF14KeyCode:
                     NSLog("[MSIECToolboxAgent] F5 (keycode 79) intercepté → toggle mic mute")
@@ -1392,7 +1446,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                     me.toggleDisplayRotation()
                     return nil
                 case kF6KeyCode:
-                    NSLog("[MSIECToolboxAgent] F6 (keycode 118) intercepté → toggle caméra")
+                    NSLog("[MSIECToolboxAgent] F6 (keycode 80) intercepté → toggle caméra")
                     me.toggleCameraState()
                     return nil
                 case kF8KeyCode:
@@ -1429,6 +1483,12 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     // timer notices a permission revoked or invalidated by a new signature.
 
     private var tapWatchdogTimer: DispatchSourceTimer?
+
+    // Opt-in diagnostic, to identify keys macOS does not handle (e.g. the
+    // MSI touchpad key): logs every key event while enabled, so it is a
+    // keylogger in the unified log — keep it off outside a short test.
+    //   defaults write MSIECToolboxAgent debug_keys -bool true   (then restart the agent)
+    fileprivate let debugKeys = UserDefaults.standard.bool(forKey: "debug_keys")
     private var screenObserver: NSObjectProtocol?
 
     fileprivate func reenableTapIfNeeded(reason: String) {
@@ -1622,6 +1682,23 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                 }
             } else {
                 NSLog("[MSIECToolboxAgent] setCameraState échoué — kext non connecté ?")
+            }
+        }
+    }
+
+    // ── Trackpad (VoodooI2C / VoodooPS2, through the kext) ───────────────────
+
+    private func toggleTrackpad() {
+        client.run({ $0.setTouchpad(.toggle) }) { [weak self] enabled in
+            guard let self = self else { return }
+            guard let enabled = enabled else {
+                NSLog("[MSIECToolboxAgent] Trackpad : bascule impossible (kext ou driver trackpad indisponible)")
+                return
+            }
+            NSLog("[MSIECToolboxAgent] Trackpad → %@", enabled ? "actif" : "désactivé")
+            self.menuBar.updateTrackpadItem(enabled: enabled)
+            if self.menuBar.prefShowOSD {
+                MuteOSD.show(muted: !enabled, isMic: false, isTrackpad: true)
             }
         }
     }
@@ -2002,7 +2079,7 @@ final class MuteOSD {
     private static var window: NSWindow?
     private static var hideTimer: Timer?
 
-    static func show(muted: Bool, isMic: Bool, isCam: Bool = false) {
+    static func show(muted: Bool, isMic: Bool, isCam: Bool = false, isTrackpad: Bool = false) {
         hideTimer?.invalidate()
 
         // Créer la fenêtre si besoin
@@ -2013,7 +2090,7 @@ final class MuteOSD {
         // contentView = NSVisualEffectView → OSDView est dans ses subviews
         let osdView = (win.contentView as? NSVisualEffectView)?.subviews.first as? OSDView
                    ?? win.contentView as? OSDView
-        osdView?.configure(muted: muted, isMic: isMic, isCam: isCam)
+        osdView?.configure(muted: muted, isMic: isMic, isCam: isCam, isTrackpad: isTrackpad)
 
         // Centrer légèrement en bas de l'écran (style macOS)
         if let screen = NSScreen.main {
@@ -2082,11 +2159,13 @@ private final class OSDView: NSView {
     private var muted:  Bool = true
     private var isMic:  Bool = true
     private var isCam:  Bool = false
+    private var isTrackpad: Bool = false
 
-    func configure(muted: Bool, isMic: Bool, isCam: Bool = false) {
+    func configure(muted: Bool, isMic: Bool, isCam: Bool = false, isTrackpad: Bool = false) {
         self.muted = muted
         self.isMic = isMic
         self.isCam = isCam
+        self.isTrackpad = isTrackpad
         needsDisplay = true
     }
 
@@ -2100,6 +2179,8 @@ private final class OSDView: NSView {
         let symName: String
         if isCam {
             symName = "camera.fill"  // barre dessinée manuellement si coupée
+        } else if isTrackpad {
+            symName = "rectangle.and.hand.point.up.left.fill"  // idem
         } else if isMic {
             symName = muted ? "mic.slash.fill" : "mic.fill"
         } else {
@@ -2122,7 +2203,7 @@ private final class OSDView: NSView {
         }
 
         // Barre diagonale rouge pour caméra coupée
-        if isCam && muted, let sym2 = NSImage(systemSymbolName: symName, accessibilityDescription: nil) {
+        if (isCam || isTrackpad) && muted, let sym2 = NSImage(systemSymbolName: symName, accessibilityDescription: nil) {
             let cfg2 = NSImage.SymbolConfiguration(pointSize: 52, weight: .medium)
             let img2 = sym2.withSymbolConfiguration(cfg2) ?? sym2
             let iw2 = img2.size.width, ih2 = img2.size.height
@@ -2147,6 +2228,8 @@ private final class OSDView: NSView {
         let label: String
         if isCam {
             label = muted ? "Caméra coupée" : "Caméra active"
+        } else if isTrackpad {
+            label = muted ? "Trackpad désactivé" : "Trackpad actif"
         } else if isMic {
             label = muted ? "Mic muet" : "Mic actif"
         } else {
