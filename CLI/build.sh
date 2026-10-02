@@ -1,9 +1,9 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
 # build.sh — Compile MSIECToolboxDump CLI tool
-# Requires: kext MSIECToolbox loaded (sudo to run the output binary)
+# Requires: kext MSIECToolbox loaded; run from the logged-in console session (no sudo needed)
 # Usage:    bash build.sh
-#           sudo ./MSIECToolboxDump [--offset 0xXX] [--watch] [--diff] [--json]
+#           ./MSIECToolboxDump [--offset 0xXX] [--watch] [--diff] [--json]
 # ---------------------------------------------------------------------------
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,4 +18,4 @@ swiftc "$SCRIPT_DIR/MSIECToolboxDump.swift" \
     -O
 
 echo "✅ Build OK → $SCRIPT_DIR/MSIECToolboxDump"
-echo "   Run with: sudo ./MSIECToolboxDump"
+echo "   Run with: ./MSIECToolboxDump"

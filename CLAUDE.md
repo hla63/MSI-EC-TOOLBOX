@@ -201,7 +201,7 @@ Lilu.kext → VirtualSMC.kext → MSIECToolbox.kext → SMCMSIFan.kext
 The CLI dump tool is the primary debugging aid for EC register changes:
 ```bash
 MSIECToolboxDump                  # single dump of all 256 registers
-MSIECToolboxDump --watch          # continuous polling, changed registers in red
+MSIECToolboxDump --watch          # continuous polling, changed registers in red (--interval ≥ 0.5 s)
 MSIECToolboxDump --diff           # two snapshots (press Enter between them), changes listed
 MSIECToolboxDump --offset 0x2B    # single register
 MSIECToolboxDump --json           # structured output

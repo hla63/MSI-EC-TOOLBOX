@@ -1003,13 +1003,17 @@ final class MenuBarController {
             }
 
             // Cooler Boost
-            let boost = state.coolerBoost != 0
-            if state.isValid(MSIStateValid.coolerBoost) && boost != self.coolerBoostOn {
-                self.coolerBoostOn = boost
-                self.coolerBoostItem.title = "Cooler Boost : \(boost ? "ON 🔥" : "OFF")"
-                self.coolerBoostItem.image = self.sfImage("flame", muted: boost)
+            if state.isValid(MSIStateValid.coolerBoost) {
+                self.updateCoolerBoostItem(on: state.coolerBoost != 0)
             }
         }
+    }
+
+    func updateCoolerBoostItem(on boost: Bool) {
+        guard boost != coolerBoostOn else { return }
+        coolerBoostOn = boost
+        coolerBoostItem.title = "Cooler Boost : \(boost ? "ON 🔥" : "OFF")"
+        coolerBoostItem.image = sfImage("flame", muted: boost)
     }
 
     func updateFanModeItems(mode: FanMode) {
@@ -1284,6 +1288,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if let lvl = initial.kb      { self.menuBar.updateKbBacklightItems(level: lvl) }
             if let pct = initial.battery { self.menuBar.updateBatteryLimitItem(percent: pct) }
+            // Menu and LEDs follow CoreAudio from the start, not only after
+            // its first change. Queued before the first poll, so the poll
+            // reads the LEDs already written.
+            self.refresh()
         }
         client.watchService(
             onConnect:    { [weak self] in self?.refresh() },
@@ -1312,7 +1320,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // AUDIT-FIX-6 : supprimer le fichier PID à l'arrêt propre.
         // Évite qu'un PID recyclé par le kernel soit confondu avec notre agent.
-        try? FileManager.default.removeItem(atPath: "/tmp/MSIECToolboxAgent.pid")
+        try? FileManager.default.removeItem(atPath: pidFile)
         pollTimer?.cancel()
         fanTimer?.cancel()
         accessibilityRetryTimer?.cancel()
@@ -1607,6 +1615,8 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if ok {
                 NSLog("[MSIECToolboxAgent] setCameraState → cameraOff=%d", newState ? 1 : 0)
+                self.lastCamState = newState
+                self.menuBar.updateCameraItem(active: !newState)
                 if self.menuBar.prefShowOSD {
                     MuteOSD.show(muted: newState, isMic: false, isCam: true)
                 }
@@ -1673,18 +1683,25 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     }
 
     private func openFanCurvePanel() {
-        // Activer le mode Advanced si ce n'est pas déjà le cas
-        let switchToAdvanced = menuBar.currentFanMode != .advanced
-        client.run({ c -> MSIFanCurve? in
-            if switchToAdvanced { _ = c.setFanMode(.advanced) }
-            return c.getFanCurve()  // courbe actuelle lue dans l'EC
-        }) { [weak self] curve in
-            guard let self = self else { return }
-            if switchToAdvanced { self.menuBar.updateFanModeItems(mode: .advanced) }
-            FanCurvePanel.show(current: curve ?? MSIFanCurve()) { [weak self] newCurve in
-                self?.client.run({ $0.setFanCurve(newCurve) }) { ok in
-                    NSLog(ok ? "[MSIECToolboxAgent] setFanCurve applied"
+        // Only read the current curve here: switching to Advanced mode waits
+        // for "Appliquer", so closing the editor leaves the fan mode as is.
+        client.run({ $0.getFanCurve() }) { [weak self] curve in
+            guard self != nil else { return }
+            FanCurvePanel.show(current: curve ?? MSIFanCurve()) { [weak self] newCurve, done in
+                guard let self = self else { done(false); return }
+                // The curve is only used in Advanced mode: write it first,
+                // then switch, so the EC never runs Advanced on a stale curve.
+                self.client.run({ c -> Bool in
+                    guard c.setFanCurve(newCurve) else { return false }
+                    return c.setFanMode(.advanced)
+                }) { [weak self] ok in
+                    NSLog(ok ? "[MSIECToolboxAgent] setFanCurve applied (mode Avancé)"
                              : "[MSIECToolboxAgent] setFanCurve failed — refusée par le kext ou kext non connecté")
+                    if ok {
+                        self?.menuBar.currentFanMode = .advanced
+                        self?.menuBar.updateFanModeItems(mode: .advanced)
+                    }
+                    done(ok)
                 }
             }
         }
@@ -1692,8 +1709,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
 
     private func toggleCoolerBoost() {
         let newState = !(menuBar.currentCoolerBoostOn)
-        client.run({ $0.setCoolerBoost(newState) }) { ok in
-            if ok { NSLog("[MSIECToolboxAgent] coolerBoost → %@", newState ? "ON" : "OFF") }
+        client.run({ $0.setCoolerBoost(newState) }) { [weak self] ok in
+            guard ok else { return }
+            NSLog("[MSIECToolboxAgent] coolerBoost → %@", newState ? "ON" : "OFF")
+            self?.menuBar.updateCoolerBoostItem(on: newState)
         }
     }
 
@@ -1934,7 +1953,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
 
 // ── Guard instance unique ─────────────────────────────────────────────────
 // Évite deux instances simultanées (double lancement manuel + launchd).
-let pidFile = "/tmp/MSIECToolboxAgent.pid"
+// Per-user temporary directory ($TMPDIR, mode 0700): /tmp is shared, so
+// another user could pre-create the file and keep the agent from starting.
+let pidFile = FileManager.default.temporaryDirectory
+    .appendingPathComponent("MSIECToolboxAgent.pid").path
 let myPID   = ProcessInfo.processInfo.processIdentifier
 
 func isProcessRunning(_ pid: Int32) -> Bool {
@@ -2146,7 +2168,7 @@ private final class OSDView: NSView {
 
 final class PreferencesPanel: NSObject {
 
-    // Lazily created on first open, freed on close (see NSWindowDelegate below)
+    // Lazily created on first open and kept for the agent's lifetime
     static var shared: PreferencesPanel?
     private var panel: NSPanel!
     private weak var controller: MenuBarController?
@@ -2353,7 +2375,7 @@ final class PreferencesPanel: NSObject {
 // on main with the bytes (nil on failure).
 typealias ECDumpFetcher = (@escaping ([UInt8]?) -> Void) -> Void
 
-final class ECDumpPanel: NSObject {
+final class ECDumpPanel: NSObject, NSWindowDelegate {
 
     static var shared: ECDumpPanel?
 
@@ -2404,6 +2426,7 @@ final class ECDumpPanel: NSObject {
         panel.title = "Table EC — MSI Modern 15 A10M"
         panel.level = .floating
         panel.isReleasedWhenClosed = false
+        panel.delegate = self
         panel.center()
 
         let root = NSView(frame: NSRect(x: 0, y: 0, width: W, height: H))
@@ -2502,6 +2525,12 @@ final class ECDumpPanel: NSObject {
         }
     }
 
+    // Closing the window must stop the auto-refresh, which otherwise keeps
+    // dumping 256 EC registers every 2 s for nothing.
+    func windowWillClose(_ notification: Notification) {
+        ECDumpPanel.stop()
+    }
+
     // Arrêter le timer quand le panel se ferme
     static func stop() {
         shared?.autoRefreshTimer?.invalidate()
@@ -2524,10 +2553,13 @@ final class FanCurvePanel: NSObject {
     private var profilePopup: NSPopUpButton!
     private var saveBtn:     NSButton!
     private var deleteBtn:   NSButton!
-    private var onApply:   ((MSIFanCurve) -> Void)?
+    // Applies the curve, then calls the completion on main with the result.
+    typealias ApplyHandler = (MSIFanCurve, @escaping (Bool) -> Void) -> Void
+
+    private var onApply:   ApplyHandler?
     private var curve:     MSIFanCurve
 
-    static func show(current: MSIFanCurve, onApply: @escaping (MSIFanCurve) -> Void) {
+    static func show(current: MSIFanCurve, onApply: @escaping ApplyHandler) {
         if shared == nil { shared = FanCurvePanel() }
         shared!.configure(curve: current, onApply: onApply)
         shared!.panel.makeKeyAndOrderFront(nil)
@@ -2669,7 +2701,7 @@ final class FanCurvePanel: NSObject {
         root.addSubview(note)
     }
 
-    private func configure(curve: MSIFanCurve, onApply: @escaping (MSIFanCurve) -> Void) {
+    private func configure(curve: MSIFanCurve, onApply: @escaping ApplyHandler) {
         self.onApply = onApply
         self.curve   = curve
         let t = curve.tempsArray
@@ -2693,7 +2725,7 @@ final class FanCurvePanel: NSObject {
     @objc private func tapLoadProfile() {
         let name = profilePopup.titleOfSelectedItem ?? ""
         guard let profile = FanProfileManager.shared.profile(named: name) else { return }
-        configure(curve: profile.toCurve(), onApply: onApply ?? { _ in })
+        configure(curve: profile.toCurve(), onApply: onApply ?? { _, done in done(false) })
     }
 
     @objc private func tapSaveProfile() {
@@ -2714,7 +2746,7 @@ final class FanCurvePanel: NSObject {
         reloadProfilePopup()
         // Sélectionner le profil sauvegardé
         profilePopup.selectItem(withTitle: name)
-        NSLog("[MSIECToolboxAgent] Profil sauvegardé : \(name)")
+        NSLog("[MSIECToolboxAgent] Profil sauvegardé : %@", name)
     }
 
     @objc private func tapDeleteProfile() {
@@ -2729,7 +2761,7 @@ final class FanCurvePanel: NSObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         FanProfileManager.shared.delete(name: name)
         reloadProfilePopup()
-        NSLog("[MSIECToolboxAgent] Profil supprimé : \(name)")
+        NSLog("[MSIECToolboxAgent] Profil supprimé : %@", name)
     }
 
     private func readCurve() -> MSIFanCurve {
@@ -2770,8 +2802,21 @@ final class FanCurvePanel: NSObject {
             alert.runModal()
             return
         }
-        onApply?(curve)
-        panel.orderOut(nil)
+        guard let onApply = onApply else { return }
+        applyBtn.isEnabled = false
+        onApply(curve) { [weak self] ok in
+            guard let self = self else { return }
+            self.applyBtn.isEnabled = true
+            if ok {
+                self.panel.orderOut(nil)
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "Courbe non appliquée"
+                alert.informativeText = "Le kext a refusé la courbe ou n'est pas chargé. "
+                                      + "Le mode de ventilation n'a pas été modifié."
+                alert.runModal()
+            }
+        }
     }
 
     // Same rule as the kext (kMSIFanCurveFloor*): checked here so the user
@@ -2789,7 +2834,7 @@ final class FanCurvePanel: NSObject {
     }
 
     @objc private func tapReset() {
-        configure(curve: MSIFanCurve(), onApply: onApply ?? { _ in })
+        configure(curve: MSIFanCurve(), onApply: onApply ?? { _, done in done(false) })
     }
 }
 
