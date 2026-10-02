@@ -680,6 +680,84 @@ IOReturn MSIECCore::setCameraState(bool cameraOff) {
 // rather than computing RPM from stale zero values.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// setTouchpad — enable/disable the touchpad from user space
+//
+// VoodooPS2's keyboard toggles the touchpad (PrtSc) by sending two IOKit
+// messages to every service published with RM,deliverNotifications = true.
+// VoodooI2CHID (I2C touchpads) and the VoodooPS2 trackpads handle them; the
+// keyboard ignores them. No user-space interface exists, so the kext relays
+// the same messages. The state is read from the first touchpad driver found
+// and the new state is sent to every consumer, as VoodooPS2 does.
+// ---------------------------------------------------------------------------
+
+static constexpr UInt32 kTouchpadMsgSetStatus = iokit_vendor_specific_msg(100);  // data: bool* enable
+static constexpr UInt32 kTouchpadMsgGetStatus = iokit_vendor_specific_msg(101);  // data: bool* enabled
+
+static bool isTouchpadDriver(IOService *svc) {
+    static const char *const classes[] = {
+        "VoodooI2CMultitouchHIDEventDriver",  // VoodooI2CHID (and subclasses)
+        "ApplePS2SynapticsTouchPad",
+        "ApplePS2Elan",
+        "ApplePS2ALPSGlidePoint",
+        "ApplePS2SentelicFSP",
+    };
+    for (const char *name : classes)
+        if (svc->metaCast(name)) return true;
+    return false;
+}
+
+IOReturn MSIECCore::setTouchpad(uint8_t request, bool &outEnabled) {
+    if (request > kMSITouchpadToggle) return kIOReturnBadArgument;
+
+    const OSSymbol *key = OSSymbol::withCString("RM,deliverNotifications");
+    if (!key) return kIOReturnNoMemory;
+    OSDictionary *match = IOService::propertyMatching(key, kOSBooleanTrue);
+    key->release();
+    if (!match) return kIOReturnNoMemory;
+    OSIterator *it = IOService::getMatchingServices(match);
+    match->release();
+    if (!it) return kIOReturnNotFound;
+
+    OSArray *consumers = OSArray::withCapacity(4);
+    IOService *touchpad = nullptr;
+    while (OSObject *obj = it->getNextObject()) {
+        IOService *svc = OSDynamicCast(IOService, obj);
+        if (!svc || !consumers) continue;
+        consumers->setObject(svc);
+        if (!touchpad && isTouchpadDriver(svc)) touchpad = svc;
+    }
+    it->release();
+
+    if (!consumers || !touchpad) {
+        OSSafeReleaseNULL(consumers);
+        MSIEC_ERR("setTouchpad: no touchpad driver with RM,deliverNotifications");
+        return kIOReturnNotFound;
+    }
+
+    bool enabled = true;
+    touchpad->message(kTouchpadMsgGetStatus, nullptr, &enabled);
+
+    if (request != kMSITouchpadQuery) {
+        bool want = (request == kMSITouchpadEnable)  ? true
+                  : (request == kMSITouchpadDisable) ? false
+                  : !enabled;
+        for (unsigned i = 0; i < consumers->getCount(); i++) {
+            IOService *svc = OSDynamicCast(IOService, consumers->getObject(i));
+            bool value = want;  // a consumer may write through the pointer
+            if (svc) svc->message(kTouchpadMsgSetStatus, nullptr, &value);
+        }
+        enabled = true;
+        touchpad->message(kTouchpadMsgGetStatus, nullptr, &enabled);
+        MSIEC_LOG("setTouchpad: request=%d -> enabled=%d (%u consumers)",
+                  request, (int)enabled, consumers->getCount());
+    }
+
+    consumers->release();
+    outEnabled = enabled;
+    return kIOReturnSuccess;
+}
+
 IOReturn MSIECCore::readFanRPM(uint16_t &outCpuRPM, uint16_t &outGpuRPM) {
     static const uint8_t offsets[4] = {
         kMSI_EC_FAN_GPU_HI, kMSI_EC_FAN_GPU_LO, kMSI_EC_FAN_CPU_HI, kMSI_EC_FAN_CPU_LO

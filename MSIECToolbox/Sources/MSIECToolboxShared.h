@@ -185,6 +185,7 @@ enum MSIECToolboxSelector : uint32_t {
     kMSIGetBatteryCharge = 13,
     kMSISetFanCurve      = 14,
     kMSIGetFanCurve      = 15,
+    kMSISetTouchpad      = 16,
     kMSISelectorCount
 };
 
@@ -290,6 +291,25 @@ struct MSIFanCurve {
 
 static constexpr uint8_t kMSIFanCurveFloorTempC    = 70;
 static constexpr uint8_t kMSIFanCurveFloorSpeedPct = 50;
+
+// Selector 16 — touchpad enable/disable (not an EC register).
+// The kext relays the request to the touchpad drivers with the same IOKit
+// messages VoodooPS2's PrtSc toggle uses (VoodooI2CHID and VoodooPS2
+// trackpads both handle them).
+//   input:  request = kMSITouchpad*
+//   output: enabled = state after the request (1 = enabled)
+enum : uint8_t {
+    kMSITouchpadQuery   = 0,
+    kMSITouchpadDisable = 1,
+    kMSITouchpadEnable  = 2,
+    kMSITouchpadToggle  = 3,
+};
+
+struct MSITouchpadState {
+    uint8_t request;    // input:  kMSITouchpad*
+    uint8_t enabled;    // output: 1 = enabled
+    uint8_t reserved[2];
+} __attribute__((packed));
 
 // ---------------------------------------------------------------------------
 // Kernel-to-kernel interface: SMCMSIFan reads the EC through

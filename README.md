@@ -263,12 +263,13 @@ Copy `SSDT-MSI-KEY_FIX.aml` to `EFI/OC/ACPI/` and add it to `config.plist`:
 |---|---|---|---|
 | `e071` | F5 mute mic | `0x4F` (ADB F14) | keycode 79 → toggle mic mute |
 | `e072` | F12 rotation | `0x6F` (ADB) | keycode 111 → rotate screen 180° |
-| `e06e` | F6 camera | `0x76` (ADB) | keycode 118 → toggle camera |
+| `e06e` | F6 camera | `0x50` (ADB F19) | keycode 80 → toggle camera (was `0x76` = keycode 118, the standard F4: Fn+F4 toggled the camera) |
+| `76` (F24, with Ctrl+Win) | F4 touchpad | `0x5A` (ADB F20) | keycode 90 → toggle touchpad (VoodooI2C/VoodooPS2, via the kext) |
 | `e077` | Volume − | `0x6B` (ADB) | natively supported by macOS |
 | `e078` | Volume + | `0x71` (ADB) | natively supported by macOS |
 | `e037` | Snapshot | `0x64` (PS2→PS2) | remapped to Screenshot |
 
-> The LaunchAgent intercepts keycodes 79, 111, and 118 via `CGEvent.tapCreate`
+> The LaunchAgent intercepts keycodes 79, 111, 80, 90 and 100 via `CGEvent.tapCreate`
 > at the session level (`cgSessionEventTap`). The **Accessibility** permission is
 > required for this tap to be active.
 

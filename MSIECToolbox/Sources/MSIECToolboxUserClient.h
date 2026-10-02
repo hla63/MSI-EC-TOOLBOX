@@ -52,6 +52,8 @@ private:
                                             IOExternalMethodArguments *args);
     static IOReturn sActionGetFanCurve       (OSObject *target, void *ref,
                                             IOExternalMethodArguments *args);
+    static IOReturn sActionSetTouchpad       (OSObject *target, void *ref,
+                                            IOExternalMethodArguments *args);
 
     static IOExternalMethodDispatch sMethods[kMSISelectorCount];
 };

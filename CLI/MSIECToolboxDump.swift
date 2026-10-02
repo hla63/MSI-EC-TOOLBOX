@@ -3,12 +3,12 @@
 // CLI — Affiche la table EC complète (256 registres) du MSI Modern 15
 //
 // Usage:
-//   sudo MSIECToolboxDump                 # dump complet (tableau hex 16x16)
-//   sudo MSIECToolboxDump --offset 0x2B   # affiche un registre précis
-//   sudo MSIECToolboxDump --diff           # compare deux dumps (avant/après)
-//   sudo MSIECToolboxDump --watch          # refresh automatique toutes les 2s
-//   sudo MSIECToolboxDump --json           # sortie JSON (scripting)
-//   sudo MSIECToolboxDump --help
+//   MSIECToolboxDump                 # dump complet (tableau hex 16x16)
+//   MSIECToolboxDump --offset 0x2B   # affiche un registre précis
+//   MSIECToolboxDump --diff           # compare deux dumps (avant/après)
+//   MSIECToolboxDump --watch          # refresh automatique toutes les 2s
+//   MSIECToolboxDump --json           # sortie JSON (scripting)
+//   MSIECToolboxDump --help
 //
 // Prérequis : le kext MSIECToolbox doit être chargé (OpenCore).
 // ---------------------------------------------------------------------------
@@ -50,7 +50,8 @@ func openConnection() -> io_connect_t? {
     let kr = IOServiceOpen(service, mach_task_self_, 0, &conn)
     guard kr == KERN_SUCCESS else {
         fputs(String(format: "❌ IOServiceOpen failed: 0x%08X\n", kr), stderr)
-        fputs("   → Relancer avec sudo ?\n", stderr)
+        fputs("   → Le kext n'accepte que l'utilisateur connecté à la session (ou root) :\n", stderr)
+        fputs("     lancer depuis le Terminal de la session, pas via ssh ou un autre compte.\n", stderr)
         return nil
     }
     return conn
@@ -200,9 +201,9 @@ func renderLegend(_ data: [UInt8]) -> String {
                 ? colored(String(format: " [0x%02X — LED ON, MUET]",  val), ansiRed)
                 : colored(String(format: " [0x%02X — LED OFF, actif]", val), ansiGreen)
         } else if offset == 0x2E {
-            indicator = (val == 0x49)
-                ? colored(" [0x49 — COUPÉE]", ansiRed)
-                : colored(" [0x4B — active]", ansiGreen)
+            indicator = (val == 0x49) ? colored(" [0x49 — COUPÉE]", ansiRed)
+                      : (val == 0x4B) ? colored(" [0x4B — active]", ansiGreen)
+                      : colored(String(format: " [0x%02X — valeur inconnue]", val), ansiYellow)
         } else if offset == 0x98 {
             indicator = (val & 0x80) != 0
                 ? colored(" [Cooler Boost ON]", ansiRed + ansiBold)
@@ -289,6 +290,11 @@ func parseArgs() -> Args? {
                 fputs("❌ --interval requiert un nombre (secondes)\n", stderr); return nil
             }
             argv.removeFirst()
+            // Each pass is 256 EC reads: below 0.5 s the CLI would hog the EC
+            // bus that ACPI, the agent and SMCMSIFan share.
+            guard val >= 0.5 else {
+                fputs("❌ --interval doit être d'au moins 0.5 seconde\n", stderr); return nil
+            }
             args.interval = val
         default:
             fputs("❌ Argument inconnu : \(a)\n", stderr); return nil
@@ -302,7 +308,7 @@ func printUsage() {
 \(colored("MSIECToolboxDump", ansiBold)) — Dump table EC (MSI Modern 15)
 
 \(colored("Usage:", ansiBold))
-  sudo MSIECToolboxDump [options]
+  MSIECToolboxDump [options]
 
 \(colored("Options:", ansiBold))
   \(colored("--offset, -o <hex>", ansiCyan))   Affiche un seul registre (ex: --offset 0x2B)
@@ -318,12 +324,12 @@ func printUsage() {
   \(colored("Gris", ansiDim))   Valeur 0x00
 
 \(colored("Exemples:", ansiBold))
-  sudo MSIECToolboxDump                    # dump tableau complet
-  sudo MSIECToolboxDump --offset 0x2B      # registre LED mute speaker
-  sudo MSIECToolboxDump --watch            # surveillance en temps réel
-  sudo MSIECToolboxDump --watch --interval 0.5
-  sudo MSIECToolboxDump --json > ec.json   # export JSON
-  sudo MSIECToolboxDump --diff             # snapshot avant/après (pause entre les deux)
+  MSIECToolboxDump                    # dump tableau complet
+  MSIECToolboxDump --offset 0x2B      # registre LED mute speaker
+  MSIECToolboxDump --watch            # surveillance en temps réel
+  MSIECToolboxDump --watch --interval 0.5
+  MSIECToolboxDump --json > ec.json   # export JSON
+  MSIECToolboxDump --diff             # snapshot avant/après (pause entre les deux)
 """)
 }
 
@@ -341,10 +347,12 @@ if let offset = args.offset {
     }
     guard let data = readECDump(conn: conn) else { exit(3) }
     let val = data[offset]
-    print(String(format: "\n Offset %@ = %@ (%d / 0b%08b)\n",
+    let bits = String(val, radix: 2)
+    let binary = String(repeating: "0", count: 8 - bits.count) + bits
+    print(String(format: "\n Offset %@ = %@ (%d / 0b%@)\n",
         colored(String(format: "0x%02X", offset), ansiYellow + ansiBold),
         colored(String(format: "0x%02X", val), ansiBold),
-        val, val))
+        val, binary))
     if let info = knownRegisters[offset] {
         print(String(format: " %@  %@\n",
             colored(info.name, ansiGreen + ansiBold), info.desc))

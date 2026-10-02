@@ -54,6 +54,10 @@ public:
     static IOReturn setBatteryCharge(uint8_t percent);  // 80 or 100
     static IOReturn getBatteryCharge(uint8_t &outPercent);
 
+    // --- Touchpad (relayed to the touchpad drivers, not the EC) -------------
+
+    static IOReturn setTouchpad(uint8_t request, bool &outEnabled);  // request: kMSITouchpad*
+
     // --- EC bus access ------------------------------------------------------
     // Every EC access in both kexts goes through these, so a multi-byte
     // sequence is never interleaved with another one (see BusGuard).
