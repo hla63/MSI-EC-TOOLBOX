@@ -51,7 +51,7 @@ There are no tests and no CI. Kernel sources can be syntax-checked off-Mac with 
 ```bash
 # Manual compile
 cd LaunchAgent
-swiftc MSIECToolboxAgent.swift \
+swiftc Sources/*.swift -module-name MSIECToolboxAgent \
   -o MSIECToolboxAgent \
   -framework Foundation -framework AppKit \
   -framework CoreAudio -framework IOKit \
@@ -121,6 +121,8 @@ Login
     2s timer   → selector 5 (readFanRPM)
 ```
 
+**Agent source layout** (`LaunchAgent/Sources/`, one module, `main.swift` is the only file allowed top-level code): `ECTypes` (mirror of the kext ABI), `ECClient` (IOKit client + its serial queue), `MenuBarController` (status item, menu, preference state), `MuteObserver` (app delegate: key tap and Fn keycodes, CoreAudio sync, EC polling, rotation, menu actions), `MuteOSD`, `PreferencesPanel`, `ECDumpPanel`, `FanCurvePanel`, `FanProfiles`. File-scope `private` declarations (keycodes, `WatchBox`, `OSDView`) are only visible in their file — keep them next to their only user. `MSIECToolboxInstaller.swift` is a separate executable, not part of the agent.
+
 **Agent threading**: every IOKit call goes through `MSIECToolboxClient.queue` (serial, `.utility`), usually via `client.run({ work on queue }) { result on main }`. Never call a client method from the main thread: the CGEventTap runs on the main run loop and every keystroke of the system waits for it, while a kext call can block for tens of ms on the EC. The poll/RPM timers fire on that queue and hand a snapshot to `applyPoll` on main, where all agent state (`lastSent*`, `lastCamState`, menu items) lives. Because the queue is serial, a poll queued after a write reads the written state and its result reaches main after the write's completion.
 
 **CGEventTap health**: macOS disables the tap when the main run loop is too slow (e.g. during a display reconfiguration — rotating to 90°/270°) or on Secure Input, and only reports it with the next event, which is then lost. `MuteObserver` re-enables it on `NSApplication.didChangeScreenParametersNotification` and from a 2 s watchdog, which also shows the menu warning (`setAccessibilityWarning`) when `AXIsProcessTrusted()` is false — the case after a re-signature, where the Accessibility entry looks checked but must be removed and re-added.
@@ -186,7 +188,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 - **Thread safety**: `ecLock` (EC bus, via `BusGuard`) is allocated once by whichever of `pluginStart()` / `MSIECToolboxDriver::start()` runs first, and is never freed. The mute state (`speakerMuted` / `micMuted`) and other cross-thread flags are `_Atomic` with acquire/release — no mutex, because the hook reads them in ACPI context.
 - **Logging**: MSIECToolbox uses its own `MSIEC_LOG` / `MSIEC_ERR` macros, compiled in by `#ifdef DEBUG` (Debug configuration), not by a bootarg; `MSIEC_ERR` is always on. SMCMSIFan uses Lilu `DBGLOG`/`SYSLOG`; `DBGLOG` needs a DEBUG build and `-smcmsifan.dbg` (or `-vsmcdbg` / `-liludbgall`).
 - **IOReturn**: All UserClient selectors return `IOReturn`; check against `kIOReturnSuccess`
-- **Shared header**: `MSIECToolboxShared.h` is C++ (`constexpr`, typed enums) and is included by both kexts (SMCMSIFan via a header search path to `MSIECToolbox/Sources`). It is **not** imported into Swift: the agent and the CLI mirror selectors and structs by hand, so any change to a selector or struct layout must be replicated in `LaunchAgent/MSIECToolboxAgent.swift` and `CLI/MSIECToolboxDump.swift`.
+- **Shared header**: `MSIECToolboxShared.h` is C++ (`constexpr`, typed enums) and is included by both kexts (SMCMSIFan via a header search path to `MSIECToolbox/Sources`). It is **not** imported into Swift: the agent and the CLI mirror selectors and structs by hand, so any change to a selector or struct layout must be replicated in `LaunchAgent/Sources/ECTypes.swift` and `CLI/MSIECToolboxDump.swift`.
 
 ## OpenCore Load Order
 

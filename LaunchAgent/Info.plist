@@ -19,7 +19,5 @@
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
-    <key>NSUserNotificationUsageDescription</key>
-    <string>MSIECToolbox utilise les notifications pour signaler que l'autorisation Accessibilité est requise.</string>
 </dict>
 </plist>

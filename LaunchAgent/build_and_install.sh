@@ -59,7 +59,8 @@ sudo -v
 
 # 1. Compiler, signer et installer l'agent
 echo "→ Compilation de l'agent..."
-swiftc "$SCRIPT_DIR/MSIECToolboxAgent.swift" \
+swiftc "$SCRIPT_DIR"/Sources/*.swift \
+    -module-name MSIECToolboxAgent \
     -o "$BUILD_DIR/MSIECToolboxAgent" \
     -framework Foundation \
     -framework CoreAudio \

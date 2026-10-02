@@ -33,8 +33,9 @@ MSI-EC-TOOLBOX/
 │       ├── SMCMSIFanKeys.h                SMC keys (F0Ac, F0Mn, F0Mx, FNum)
 │       └── Info.plist
 ├── LaunchAgent/            ← App (Swift, macOS userspace)
-│   ├── MSIECToolboxAgent.swift
-│   └── com.msi.MSIECToolboxAgent.plist    LaunchAgent plist
+│   ├── Sources/                           Agent sources (main.swift = entry point)
+│   ├── MSIECToolboxInstaller.swift        SMAppService register/unregister helper
+│   └── build_and_install.sh               Build, sign, install, register
 └── ACPI/
     └── SSDT-MSI-KEY_FIX.dsl              Key Remapping PS2 → ADB (VoodooPS2)
 ```
@@ -117,14 +118,14 @@ SMCMSIFan.kext
 ```bash
 cd LaunchAgent
 
-swiftc MSIECToolboxAgent.swift \
+swiftc Sources/*.swift \
+  -module-name MSIECToolboxAgent \
   -o MSIECToolboxAgent \
   -framework Foundation \
   -framework AppKit \
   -framework CoreAudio \
   -framework IOKit \
   -framework CoreGraphics \
-  -framework UserNotifications \
   -O
 ```
 
