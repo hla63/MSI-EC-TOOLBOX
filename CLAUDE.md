@@ -110,7 +110,8 @@ Boot (OpenCore)
     └─ SMCMSIFan.kext (IOService on IOResources)
          registerHandler → SubmitPlugin → 1s IOTimerEventSource on its own workloop
          refreshSensors() → MSIECToolboxDriver::callPlatformFunction → cache
-         readAccess() returns the cache: F0Ac, F0Mn, F0Mx, FNum, TC0P, TG0P
+         readAccess() returns the cache: F0Ac, F0Mn, F0Mx, FNum, TG0P
+         (TC0P is left to SMCProcessor — never publish a key another plugin owns)
 
 Login
   LaunchAgent (com.msi.MSIECToolboxAgent)

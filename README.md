@@ -285,7 +285,7 @@ Boot OpenCore
          └─ pluginStart() → hook IOACPIPlatformDevice::writeECField
          └─ MSIECToolboxDriver (IOService) published → UserClient available
      └─ SMCMSIFan.kext loaded (VirtualSMC plugin)
-         └─ F0Ac / FNum / F0Mn / F0Mx / TC0P / TG0P published in VirtualSMC
+         └─ F0Ac / FNum / F0Mn / F0Mx / TG0P published in VirtualSMC (TC0P comes from SMCProcessor)
          └─ EC sampled every 1s through MSIECToolboxDriver (shared EC lock), SMC reads return the cache
 
 Login
