@@ -694,44 +694,60 @@ IOReturn MSIECCore::setCameraState(bool cameraOff) {
 static constexpr UInt32 kTouchpadMsgSetStatus = iokit_vendor_specific_msg(100);  // data: bool* enable
 static constexpr UInt32 kTouchpadMsgGetStatus = iokit_vendor_specific_msg(101);  // data: bool* enabled
 
+// Touchpad driver classes that handle the messages. Class matching includes
+// subclasses (e.g. VoodooI2CPrecisionTouchpadHIDEventDriver).
+static const char *const kTouchpadClasses[] = {
+    "VoodooI2CMultitouchHIDEventDriver",  // VoodooI2CHID (precision and generic multitouch)
+    "ApplePS2SynapticsTouchPad",
+    "ApplePS2Elan",
+    "ApplePS2ALPSGlidePoint",
+    "ApplePS2SentelicFSP",
+};
+
 static bool isTouchpadDriver(IOService *svc) {
-    static const char *const classes[] = {
-        "VoodooI2CMultitouchHIDEventDriver",  // VoodooI2CHID (and subclasses)
-        "ApplePS2SynapticsTouchPad",
-        "ApplePS2Elan",
-        "ApplePS2ALPSGlidePoint",
-        "ApplePS2SentelicFSP",
-    };
-    for (const char *name : classes)
+    for (const char *name : kTouchpadClasses)
         if (svc->metaCast(name)) return true;
     return false;
+}
+
+// Adds every service matching `match` to `set` (consumes `match`).
+static void addMatchingServices(OSSet *set, OSDictionary *match) {
+    if (!match) return;
+    if (OSIterator *it = IOService::getMatchingServices(match)) {
+        while (OSObject *obj = it->getNextObject())
+            if (IOService *svc = OSDynamicCast(IOService, obj)) set->setObject(svc);
+        it->release();
+    }
+    match->release();
 }
 
 IOReturn MSIECCore::setTouchpad(uint8_t request, bool &outEnabled) {
     if (request > kMSITouchpadToggle) return kIOReturnBadArgument;
 
-    const OSSymbol *key = OSSymbol::withCString("RM,deliverNotifications");
-    if (!key) return kIOReturnNoMemory;
-    OSDictionary *match = IOService::propertyMatching(key, kOSBooleanTrue);
-    key->release();
-    if (!match) return kIOReturnNoMemory;
-    OSIterator *it = IOService::getMatchingServices(match);
-    match->release();
-    if (!it) return kIOReturnNotFound;
-
-    OSArray *consumers = OSArray::withCapacity(4);
-    IOService *touchpad = nullptr;
-    while (OSObject *obj = it->getNextObject()) {
-        IOService *svc = OSDynamicCast(IOService, obj);
-        if (!svc || !consumers) continue;
-        consumers->setObject(svc);
-        if (!touchpad && isTouchpadDriver(svc)) touchpad = svc;
+    // Same audience as VoodooPS2 (RM,deliverNotifications) plus the touchpad
+    // drivers found by class: in VoodooI2CHID only the Precision Touchpad
+    // personality sets RM,deliverNotifications, while the generic Multitouch
+    // driver handles the same messages without it. OSSet removes duplicates.
+    OSSet *consumers = OSSet::withCapacity(4);
+    if (!consumers) return kIOReturnNoMemory;
+    if (const OSSymbol *key = OSSymbol::withCString("RM,deliverNotifications")) {
+        addMatchingServices(consumers, IOService::propertyMatching(key, kOSBooleanTrue));
+        key->release();
     }
-    it->release();
+    for (const char *name : kTouchpadClasses)
+        addMatchingServices(consumers, IOService::serviceMatching(name));
 
-    if (!consumers || !touchpad) {
-        OSSafeReleaseNULL(consumers);
-        MSIEC_ERR("setTouchpad: no touchpad driver with RM,deliverNotifications");
+    IOService *touchpad = nullptr;
+    if (OSCollectionIterator *it = OSCollectionIterator::withCollection(consumers)) {
+        while (OSObject *obj = it->getNextObject()) {
+            IOService *svc = OSDynamicCast(IOService, obj);
+            if (svc && isTouchpadDriver(svc)) { touchpad = svc; break; }
+        }
+        it->release();
+    }
+    if (!touchpad) {
+        consumers->release();
+        MSIEC_ERR("setTouchpad: no touchpad driver found (VoodooI2CHID / VoodooPS2)");
         return kIOReturnNotFound;
     }
 
@@ -742,10 +758,13 @@ IOReturn MSIECCore::setTouchpad(uint8_t request, bool &outEnabled) {
         bool want = (request == kMSITouchpadEnable)  ? true
                   : (request == kMSITouchpadDisable) ? false
                   : !enabled;
-        for (unsigned i = 0; i < consumers->getCount(); i++) {
-            IOService *svc = OSDynamicCast(IOService, consumers->getObject(i));
-            bool value = want;  // a consumer may write through the pointer
-            if (svc) svc->message(kTouchpadMsgSetStatus, nullptr, &value);
+        if (OSCollectionIterator *it = OSCollectionIterator::withCollection(consumers)) {
+            while (OSObject *obj = it->getNextObject()) {
+                bool value = want;  // a consumer may write through the pointer
+                if (IOService *svc = OSDynamicCast(IOService, obj))
+                    svc->message(kTouchpadMsgSetStatus, nullptr, &value);
+            }
+            it->release();
         }
         enabled = true;
         touchpad->message(kTouchpadMsgGetStatus, nullptr, &enabled);
