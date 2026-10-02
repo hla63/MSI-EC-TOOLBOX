@@ -122,6 +122,13 @@ Login
 
 **Naming**: the static EC class is `MSIECCore`, not `MSIECToolbox` — Lilu's `plugin_start.hpp` declares `class PRODUCT_NAME : IOService`, i.e. `class MSIECToolbox`. SMCMSIFan defines its own IOService and `kern_start`/`kern_stop` (VirtualSMC sensor template), so it does not compile `plugin_start.cpp`.
 
+**Lilu hook (`writeECField`)** — boot-critical, a mistake here panics every boot:
+- `KextInfo` must have a non-null `paths` array (`pathNum` ≥ 1). Lilu calls `loadKinfo()` on every registered `KextInfo` when its patcher starts, and `MachInfo::init()` dereferences `paths[0]` in kernel collection mode (macOS 11+). The original `{id, nullptr, 0, …}` panicked at boot as soon as the plugin actually started.
+- Target is `com.apple.driver.AppleACPIPlatform` with `sys[KextInfo::Loaded] = true` (the platform expert is always loaded before Lilu plugins).
+- The symbol `__ZN20IOACPIPlatformDevice12writeECFieldEjPKvl` and its (offset, value, size) semantics are inferred, not verified: if the symbol is missing the hook is skipped (logged); the value is only rewritten when `size == 1`, the offset is 0x2B/0x2C and the byte matches the firmware base value (0x80 / 0xE0, LED bit aside). DEBUG builds log the first 64 calls — check them with `-msiec.dbg` before trusting the hook.
+- The hook runs in ACPI context: atomics only, no `BusGuard`, no mutex, no allocation.
+- `-msiec.off` disables the whole Lilu part (hook included) while the EC driver, UserClient and SMCMSIFan keep working.
+
 **Mute LEDs**: `setMuteState` always writes the LED bit (0x04 of 0x2B/0x2C) with a read-modify-write, whether or not the hook is installed. The hook only re-applies the bit when firmware rewrites those registers; without the direct write the agent's 500 ms poll would read the old bit and revert the CoreAudio mute.
 
 **UserClient selectors** (defined in `MSIECToolboxShared.h`, dispatched in `MSIECToolboxUserClient.cpp`):
@@ -154,7 +161,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 ## Code Conventions
 
 - **Constants**: `k` prefix, `constexpr` in C++ (`kMSI_EC_*`, `kECCommandPort`, etc.)
-- **Thread safety**: `stateLock` (mute state) and `ecLock` (EC bus, via `BusGuard`) are allocated once by whichever of `pluginStart()` / `MSIECToolboxDriver::start()` runs first, and are never freed. Cross-thread flags use `_Atomic` with acquire/release.
+- **Thread safety**: `ecLock` (EC bus, via `BusGuard`) is allocated once by whichever of `pluginStart()` / `MSIECToolboxDriver::start()` runs first, and is never freed. The mute state (`speakerMuted` / `micMuted`) and other cross-thread flags are `_Atomic` with acquire/release — no mutex, because the hook reads them in ACPI context.
 - **Logging**: MSIECToolbox uses its own `MSIEC_LOG` / `MSIEC_ERR` macros, compiled in by `#ifdef DEBUG` (Debug configuration), not by a bootarg; `MSIEC_ERR` is always on. SMCMSIFan uses Lilu `DBGLOG`/`SYSLOG`; `DBGLOG` needs a DEBUG build and `-smcmsifan.dbg` (or `-vsmcdbg` / `-liludbgall`).
 - **IOReturn**: All UserClient selectors return `IOReturn`; check against `kIOReturnSuccess`
 - **Shared header**: `MSIECToolboxShared.h` is C++ (`constexpr`, typed enums) and is included by both kexts (SMCMSIFan via a header search path to `MSIECToolbox/Sources`). It is **not** imported into Swift: the agent and the CLI mirror selectors and structs by hand, so any change to a selector or struct layout must be replicated in `LaunchAgent/MSIECToolboxAgent.swift` and `CLI/MSIECToolboxDump.swift`.

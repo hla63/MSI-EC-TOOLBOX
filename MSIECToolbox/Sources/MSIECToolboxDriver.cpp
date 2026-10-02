@@ -13,7 +13,7 @@ OSDefineMetaClassAndStructors(MSIECToolboxDriver, IOService)
 bool MSIECToolboxDriver::start(IOService *provider) {
     if (!IOService::start(provider)) return false;
 
-    // Locks are also allocated here, independently of pluginStart(), so that
+    // ecLock is also allocated here, independently of pluginStart(), so that
     // EC access works even when Lilu does not start the plugin (-msiec.off,
     // unsupported macOS, ...). Only the writeECField hook needs Lilu.
     if (!MSIECCore::allocLocks()) return false;
@@ -28,12 +28,11 @@ bool MSIECToolboxDriver::start(IOService *provider) {
 }
 
 void MSIECToolboxDriver::stop(IOService *provider) {
-    // Never free stateLock / ecLock here.
-    // The Lilu hook (when installed), SMCMSIFan and any in-flight UserClient
-    // call read these static pointers with a null-check-then-lock sequence:
-    // freeing the lock between the check and IOLockLock() is a use-after-free
-    // → panic. Leaving two IOLocks allocated for the kext lifetime is an
-    // acceptable micro-leak.
+    // Never free ecLock here.
+    // SMCMSIFan and any in-flight UserClient call read this static pointer
+    // with a null-check-then-lock sequence: freeing the lock between the
+    // check and IOLockLock() is a use-after-free → panic. Leaving one IOLock
+    // allocated for the kext lifetime is an acceptable micro-leak.
     IOService::stop(provider);
 }
 
