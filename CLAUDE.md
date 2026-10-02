@@ -65,7 +65,7 @@ swiftc MSIECToolboxAgent.swift \
 SIGN_IDENTITY="<codesign identity>" ./build_and_install.sh   # stable signature keeps Accessibility across rebuilds
 ```
 
-The script builds in a private `mktemp -d` directory, signs the agent and the installer bundle with the hardened runtime (as the user, before the sudo copy), installs the agent root-owned in `/Library/Application Support/MSIECToolbox/` and the bundle in `/Applications/MSIECToolbox.app`. The LaunchAgent plist has no StandardOut/ErrorPath: logs are in the unified log (`log stream --predicate 'process == "MSIECToolboxAgent"'`).
+The script builds in a private `mktemp -d` directory, signs the agent and the installer bundle with the hardened runtime (as the user, before the sudo copy; the agent with `agent.entitlements`, whose `com.apple.security.device.audio-input` is required — without it the hardened runtime hides Core Audio input devices and the mic mute key, its OSD and the mic LED sync silently stop working), installs the agent root-owned in `/Library/Application Support/MSIECToolbox/` and the bundle in `/Applications/MSIECToolbox.app`. The LaunchAgent plist has no StandardOut/ErrorPath: logs are in the unified log (`log stream --predicate 'process == "MSIECToolboxAgent"'`).
 
 ### CLI Dump Tool
 

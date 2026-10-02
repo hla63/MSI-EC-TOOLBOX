@@ -72,8 +72,11 @@ swiftc "$SCRIPT_DIR/MSIECToolboxAgent.swift" \
 # so no other process can run code with the agent's Accessibility permission.
 # Signed as the user (codesign under sudo cannot reach the login keychain);
 # the signature is embedded in the binary and survives the copy.
+# agent.entitlements grants Core Audio input access, which the hardened
+# runtime otherwise denies (mic mute key and mic LED sync).
 codesign --force --options runtime \
     --identifier com.msi.MSIECToolboxAgent \
+    --entitlements "$SCRIPT_DIR/agent.entitlements" \
     --sign "$SIGN_IDENTITY" \
     "$BUILD_DIR/MSIECToolboxAgent"
 

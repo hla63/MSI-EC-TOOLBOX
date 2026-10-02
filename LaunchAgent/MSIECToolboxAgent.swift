@@ -1397,7 +1397,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
 
     private func toggleMicMute() {
         let deviceID = defaultInputDevice()
-        guard deviceID != kAudioObjectUnknown else { return }
+        guard deviceID != kAudioObjectUnknown else {
+            NSLog("[MSIECToolboxAgent] toggleMicMute : aucun périphérique d'entrée (entitlement audio-input / autorisation Micro ?)")
+            return
+        }
         let current = readMute(deviceID: deviceID, input: true)
         let newMuted = !current
         setAudioMute(deviceID: deviceID, input: true, muted: newMuted)
