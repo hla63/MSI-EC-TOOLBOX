@@ -109,6 +109,8 @@ Login
 
 **Agent threading**: every IOKit call goes through `MSIECToolboxClient.queue` (serial, `.utility`), usually via `client.run({ work on queue }) { result on main }`. Never call a client method from the main thread: the CGEventTap runs on the main run loop and every keystroke of the system waits for it, while a kext call can block for tens of ms on the EC. The poll/RPM timers fire on that queue and hand a snapshot to `applyPoll` on main, where all agent state (`lastSent*`, `lastCamState`, menu items) lives. Because the queue is serial, a poll queued after a write reads the written state and its result reaches main after the write's completion.
 
+**CGEventTap health**: macOS disables the tap when the main run loop is too slow (e.g. during a display reconfiguration — rotating to 90°/270°) or on Secure Input, and only reports it with the next event, which is then lost. `MuteObserver` re-enables it on `NSApplication.didChangeScreenParametersNotification` and from a 2 s watchdog, which also shows the menu warning (`setAccessibilityWarning`) when `AXIsProcessTrusted()` is false — the case after a re-signature, where the Accessibility entry looks checked but must be removed and re-added.
+
 **Mute sync direction**: CoreAudio is the source of truth. EC → CoreAudio only propagates *muting*; if the EC LED reads unmuted while the agent last sent muted, the agent rewrites the LED instead of unmuting CoreAudio (any local process can write the LED bits through the kext).
 
 **UserClient access**: `initWithTask` accepts only the console user (`kIOClientPrivilegeLocalUser`, i.e. the agent) or root (CLI under sudo).
