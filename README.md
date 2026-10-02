@@ -1,5 +1,6 @@
-# CAUTION USE AT YOUR OWN RISK THIS PROJECT IS FOR MSI MODERN 15 A10M SHOULD WORK WITH OTHER MSI MODERN LAPTOP BUT CHECK YOUR EC REGISTERS FIRST #
 # MSI-EC-TOOLBOX
+
+> **Caution — use at your own risk.** This project targets the MSI Modern 15 A10M. It may work on other MSI Modern laptops, but check your EC registers first (see the CLI dump tool below).
 
 Hackintosh kext + menu bar for **MSI Modern 15 A10M** (1551EMS1 / CONF_G1_5).  
 Tested: macOS 14 Sonoma — Lilu 1.7.x, VirtualSMC 1.3.x.
@@ -8,7 +9,7 @@ Tested: macOS 14 Sonoma — Lilu 1.7.x, VirtualSMC 1.3.x.
 
 ## Project Structure
 
-The **debug kexts** for Lilu and VirtualSMC, as well as MacKernelSDK, should be placed **directly in `MSI-EC-TOOLBOX/`**, at the same level as the subprojects.
+The **DEBUG** releases of Lilu and VirtualSMC, as well as MacKernelSDK, must be placed **directly in `MSI-EC-TOOLBOX/`**, at the same level as the subprojects.
 
 - `Lilu.kext` and `VirtualSMC.kext`: download the **DEBUG** zip from the GitHub Releases.
 - `MacKernelSDK`
@@ -18,13 +19,13 @@ MSI-EC-TOOLBOX/
 ├── Lilu.kext               ← zip DEBUG Lilu (bundle, headers inside)
 ├── VirtualSMC.kext         ← zip DEBUG VirtualSMC (bundle, headers inside)
 ├── MacKernelSDK/           ← git clone acidanthera/MacKernelSDK
-├── MSIECToolbox/           
+├── MSIECToolbox/
 │   ├── MSIECToolbox.xcodeproj/
 │   └── Sources/
-│       ├── MSIECToolbox.h / .cpp          Lilu Plugin, hook EC, fallback raw I/O
-│       ├── MSIECToolboxDriver.h / .cpp    IOService minimal (provider UserClient)
-│       ├── MSIECToolboxUserClient.h / .cpp Dispatch IOKit table
-│       ├── MSIECToolboxShared.h           EC Registers, structs
+│       ├── MSIECToolbox.h / .cpp          Lilu plugin (writeECField hook) + MSIECCore (all EC access)
+│       ├── MSIECToolboxDriver.h / .cpp    IOService on the EC (PNP0C09): UserClient provider, SMCMSIFan entry points
+│       ├── MSIECToolboxUserClient.h / .cpp IOKit selector dispatch
+│       ├── MSIECToolboxShared.h           EC registers, selectors, structs (shared by both kexts)
 │       └── Info.plist
 ├── SMCMSIFan/              ← VirtualSMC Plugin (RPM fan → SMC Keys)
 │   ├── SMCMSIFan.xcodeproj/
@@ -35,28 +36,32 @@ MSI-EC-TOOLBOX/
 ├── LaunchAgent/            ← App (Swift, macOS userspace)
 │   ├── Sources/                           Agent sources (main.swift = entry point)
 │   ├── MSIECToolboxInstaller.swift        SMAppService register/unregister helper
+│   ├── agent.entitlements                 Hardened runtime entitlements (microphone access)
 │   └── build_and_install.sh               Build, sign, install, register
+├── CLI/
+│   ├── MSIECToolboxDump.swift             EC register dump tool
+│   └── Makefile
 └── ACPI/
-    └── SSDT-MSI-KEY_FIX.dsl              Key Remapping PS2 → ADB (VoodooPS2)
+    └── SSDT-MSI-KEY_FIX.dsl               Key remapping PS2 → ADB (VoodooPS2)
 ```
 
 ---
 
-## Dépendency
+## Dependencies
 
 | Dependency | Source | Usage |
 |---|---|---|
-| [MacKernelSDK](https://github.com/acidanthera/MacKernelSDK) | `git clone` |
-| [Lilu **DEBUG**](https://github.com/acidanthera/Lilu/releases) | zip Release → `Lilu.kext` |
-| [VirtualSMC **DEBUG**](https://github.com/acidanthera/VirtualSMC/releases) | zip Release → `VirtualSMC.kext` |
-| [VoodooPS2Controller](https://github.com/acidanthera/VoodooPS2) | — | SSDT remapping keys|
-| Xcode | 15.0+ | Compilation kext + LaunchAgent |
-| [iASL / iasl](https://acpica.org/downloads) | — | Compilation SSDT `.dsl` → `.aml` |
-
+| [MacKernelSDK](https://github.com/acidanthera/MacKernelSDK) | `git clone` | Kernel headers for both kexts |
+| [Lilu **DEBUG**](https://github.com/acidanthera/Lilu/releases) | Release zip → `Lilu.kext` | Plugin API (MSIECToolbox, SMCMSIFan) |
+| [VirtualSMC **DEBUG**](https://github.com/acidanthera/VirtualSMC/releases) | Release zip → `VirtualSMC.kext` | SMC plugin SDK (SMCMSIFan) |
+| [VoodooPS2Controller](https://github.com/acidanthera/VoodooPS2) | OpenCore kext | Applies the SSDT key remapping |
+| Xcode | 15.0+ | Builds the kexts, the agent and the CLI |
+| [iASL](https://acpica.org/downloads) | `brew install acpica` | Compiles the SSDT `.dsl` → `.aml` |
+| [displayplacer](https://github.com/jakehilborn/displayplacer) | `brew install displayplacer` | Screen rotation (F12), expected at `/usr/local/bin/displayplacer` |
 
 ---
 
-### Installation des dépendances
+### Installing the dependencies
 
 ```bash
 cd MSI-EC-TOOLBOX
@@ -86,7 +91,7 @@ xcodebuild -project MSIECToolbox/MSIECToolbox.xcodeproj \
            -target MSIECToolbox \
            -configuration Release \
            build
-# Résult : build/Release/MSIECToolbox.kext
+# Result: MSIECToolbox/build/Release/MSIECToolbox.kext
 ```
 
 ### SMCMSIFan.kext
@@ -98,7 +103,7 @@ xcodebuild -project SMCMSIFan/SMCMSIFan.xcodeproj \
            -target SMCMSIFan \
            -configuration Release \
            build
-# Résult : build/Release/SMCMSIFan.kext
+# Result: SMCMSIFan/build/Release/SMCMSIFan.kext
 ```
 
 ### Loading order in OpenCore `config.plist`
@@ -106,14 +111,16 @@ xcodebuild -project SMCMSIFan/SMCMSIFan.xcodeproj \
 Lilu.kext
 VirtualSMC.kext
 MSIECToolbox.kext
-SMCMSIFan.kext     
+SMCMSIFan.kext
 ```
+
+Rebuilding a kext requires copying it to `EFI/OC/Kexts/` and rebooting. The agent can be rebuilt without a reboot.
 
 ---
 
 ## Compiling and installing the LaunchAgent
 
-### 1. Compile
+### 1. Compile (optional — the install script compiles too)
 
 ```bash
 cd LaunchAgent
@@ -138,7 +145,9 @@ chmod +x build_and_install.sh
 ./build_and_install.sh
 ```
 
-The agent is signed with the hardened runtime. By default the signature is ad-hoc, which means the Accessibility permission below must be granted again after every rebuild. To keep it across rebuilds, create a code signing certificate once (Keychain Access › Certificate Assistant › Create a Certificate, type *Code Signing*) and pass its name:
+If MSIECToolbox appears as *waiting for approval*, enable it in System Settings › General › Login Items.
+
+The agent is signed with the hardened runtime. By default the signature is ad-hoc, which means the Accessibility permission below must be granted again after every rebuild. To keep it across rebuilds, create a code signing certificate once (Keychain Access › Certificate Assistant › Create a Certificate, identity type *Self-Signed Root*, certificate type *Code Signing*) and pass its name:
 
 ```bash
 SIGN_IDENTITY="MSIECToolbox Local" ./build_and_install.sh
@@ -151,23 +160,44 @@ The LaunchAgent intercepts keystrokes via `CGEvent.tapCreate`. macOS requires ex
 
 ```
 System Settings › Privacy & Security › Accessibility
-→ Add MSIECToolboxAgent ✅
+→ + → Cmd+Shift+G → /Library/Application Support/MSIECToolbox/MSIECToolboxAgent ✅
 ```
 
-Without this permission, keyboard interception is disabled, but the menu bar functions (fan mode, shift, cooler boost) remain active.
+Without this permission, keyboard interception is disabled, but the menu bar functions (fan mode, shift, cooler boost) remain active, and the menu shows an Accessibility warning.
+
+After a rebuild with a different signature (always the case with ad-hoc signing), the entry still looks enabled but no longer matches the binary: select `MSIECToolboxAgent`, remove it with **−**, then add it again with **+**. Toggling it off and on is not enough. No restart is needed: the agent picks the permission up within 10 seconds.
 
 ---
 
-## EC Register — MSI Modern 15 A10M (1551EMS)
+## CLI dump tool
 
-All these registers are accessible via ACPI raw port I/O: command `0x66`, data `0x62`.  
-Source: msi-ec BeardOverflow + personal EC RW-Everything dump.
+`MSIECToolboxDump` reads the EC through the kext (run it with `sudo`). It is the main tool to check a register before and after an action.
+
+```bash
+cd CLI && make && make install     # installs to /usr/local/bin
+
+sudo MSIECToolboxDump                  # dump of all 256 registers
+sudo MSIECToolboxDump --offset 0xEF    # single register
+sudo MSIECToolboxDump --watch          # continuous refresh, changed registers in red
+sudo MSIECToolboxDump --diff           # two snapshots (press Enter between them)
+sudo MSIECToolboxDump --json           # structured output
+```
+
+---
+
+## EC Registers — MSI Modern 15 A10M (1551EMS1)
+
+All these registers are accessed via ACPI port I/O: command `0x66`, data `0x62`.
+Sources: [msi-ec](https://github.com/BeardOverflow/msi-ec) (`CONF_G1_5`) and EC dumps of this laptop.
 
 ### Modes and Performance
 
-| Register | Values | Description ||---|---|---|
-| `0xF4` | `0x0D`=auto / `0x1D`=silent / `0x8D`=advanced | Mode fan |
-| `0x98` bit 7 | `0x80`=ON / `0x00`=OFF (masque bit 7) | Cooler Boost (fans 100%) |
+| Register | Values | Description |
+|---|---|---|
+| `0xF4` | `0x0D`=auto / `0x1D`=silent / `0x8D`=advanced | Fan mode |
+| `0x98` bit 7 | `0x80`=ON / `0x00`=OFF (bit 7 mask) | Cooler Boost (fans 100%) |
+| `0xF2` | `0xC0`=Turbo / `0xC1`=Comfort / `0xC2`=Eco | Shift mode |
+| `0xF3` | `0x80`=off … `0x83`=high | Keyboard backlight |
 
 > **Cooler Boost:** always read `0x98`, mask bit 7, then write back. The other bits
 > contain persistent firmware values (`0x02`/`0x03`/`0x05` observed in the dumps).
@@ -181,16 +211,26 @@ Source: msi-ec BeardOverflow + personal EC RW-Everything dump.
 | `0xCC–0xCD` | CPU fan RPM (big-endian) | ISW formula below |
 | `0xCA–0xCB` | GPU fan RPM (big-endian) | Second fan, same ISW formula |
 
-**RPM Formula (ISW)** :
+**RPM Formula (ISW)**:
 ```
 val = (0xCC << 8) | 0xCD
-si val == 0 : fan stopped
+if val == 0: fan stopped
 RPM = ((325 - val) * 16) + 1480
 ```
+
+### Mute LEDs and camera
+
+| Register | Values | Description |
+|---|---|---|
+| `0x2B` | base `0x80`, bit `0x04` = LED on | Microphone mute LED |
+| `0x2C` | base `0xE0`, bit `0x04` = LED on | Speaker mute LED |
+| `0x2E` | `0x4B`=on / `0x49`=off | Webcam |
+
+The LED bits are always written with a read-modify-write.
 ### CPU Fan Curve — Advanced Mode (0x6A–0x78)
 
-The curve is active only if `0xF4 = 0x8D` (advanced mode).  
-Atomic write required: all 13 registers or none.
+The curve is active only if `0xF4 = 0x8D` (advanced mode).
+The kext writes the 12 editable registers (`0x6A`–`0x6F` and `0x72`–`0x77`) in one locked sequence; `0x78` is never written.
 
 | Registers | Role | Default firmware values |
 |---|---|---|
@@ -198,10 +238,11 @@ Atomic write required: all 13 registers or none.
 | `0x72`–`0x77` | Fan speeds (6 points) | 0, 58, 65, 72, 80, 85% |
 | `0x78` | Point 6 — Fixed 100% | 0x64 (do not modify) |
 
-**Validation constraints before writing:**
+**Validation constraints (checked by the kext, a refused curve is not written):**
 - Strictly increasing temperatures: `T[n] < T[n+1]`
 - Increasing or equal speeds: `V[n] ≤ V[n+1]`
-- Ranges: temperatures 0–100°C, speeds 0–100%
+- Ranges: temperatures 20–95 °C, speeds 0–100 %
+- Thermal floor: at least 50 % from 70 °C, and on the last point
 
 ### GPU fan curve (0x82–0x90)
 
@@ -242,9 +283,11 @@ Without this SSDT, the MSI Fn keys do not generate usable events in macOS.
 brew install acpica
 
 # Compile the SSDT
-iasl -ve SSDT-MSI-KEY_FIX.dsl
+iasl -ve ACPI/SSDT-MSI-KEY_FIX.dsl
 # Generates: SSDT-MSI-KEY_FIX.aml
 ```
+
+The `.dsl` must stay pure ASCII: macOS `iasl` rejects accents, arrows or em dashes, even in comments.
 ### Installation
 
 Copy `SSDT-MSI-KEY_FIX.aml` to `EFI/OC/ACPI/` and add it to `config.plist`:
@@ -264,13 +307,14 @@ Copy `SSDT-MSI-KEY_FIX.aml` to `EFI/OC/ACPI/` and add it to `config.plist`:
 
 | PS2 scancode | Physical key | ADB keycode | CGEventTap (agent) |
 |---|---|---|---|
-| `e071` | F5 mute mic | `0x4F` (ADB F14) | keycode 79 → toggle mic mute |
-| `e072` | F12 rotation | `0x6F` (ADB) | keycode 111 → rotate screen 180° |
+| `e071` | F5 mute mic | `0x4F` (ADB F18) | keycode 79 → toggle mic mute |
+| `e072` | F12 rotation | `0x6F` (ADB F12) | keycode 111 → rotate the screen (0°↔180°, or 90° steps — see Preferences) |
 | `e06e` | F6 camera | `0x50` (ADB F19) | keycode 80 → toggle camera (was `0x76` = keycode 118, the standard F4: Fn+F4 toggled the camera) |
 | `76` (F24, with Ctrl+Win) | F4 touchpad | `0x5A` (ADB F20) | keycode 90 → toggle touchpad (VoodooI2C/VoodooPS2, via the kext) |
 | `e077` | Volume − | `0x6B` (ADB) | natively supported by macOS |
 | `e078` | Volume + | `0x71` (ADB) | natively supported by macOS |
 | `e037` | Snapshot | `0x64` (PS2→PS2) | remapped to Screenshot |
+| — | F8 backlight | standard F8 | keycode 100 → cycle keyboard backlight |
 
 > The LaunchAgent intercepts keycodes 79, 111, 80, 90 and 100 via `CGEvent.tapCreate`
 > at the session level (`cgSessionEventTap`). The **Accessibility** permission is
@@ -287,16 +331,17 @@ Boot OpenCore
          └─ pluginStart() → hook IOACPIPlatformDevice::writeECField
          └─ MSIECToolboxDriver (IOService) published → UserClient available
      └─ SMCMSIFan.kext loaded (VirtualSMC plugin)
-         └─ F0xx (CPU fan) / F1xx (GPU fan) / FNum=2 / TG0P published in VirtualSMC (TC0P comes from SMCProcessor)
+         └─ BCLM / F0xx (CPU fan) / F1xx (GPU fan) / FNum=2 / TG0P published in VirtualSMC (TC0P comes from SMCProcessor)
          └─ EC sampled every 1s through MSIECToolboxDriver (shared EC lock), SMC reads return the cache
 
 Login
  └─ LaunchAgent started via com.msi.MSIECToolboxAgent.plist
      └─ IOKit UserClient connected to MSIECToolboxDriver
-     └─ CoreAudio listener → mute changes → kext → EC
-     └─ CGEventTap → F5/F6/F12 → direct actions
-     └─ Poll 500ms via getSystemState (selector 9)
-         └─ Menu bar update (temp, fan%, modes)
+     └─ CoreAudio listener → mute changes → kext → EC (mute LEDs)
+     └─ CGEventTap → F4/F5/F6/F8/F12 → direct actions
+     └─ EC poll, menu closed: every 1 s, mute and camera state only
+     └─ EC poll, menu open: every 500 ms (temperatures, fan %, modes, backlight),
+        fan RPM and charge limit every 2 s
 ```
 
 ---
@@ -305,8 +350,8 @@ Login
 
 | Bootarg | Effect |
 |---|---|
-| `-msiec.off` | Disables MSIECToolbox |
-| `-msiec.dbg` | Enables DEBUG logs in Console.app |
+| `-msiec.off` | Disables the Lilu part (writeECField hook); the EC driver, the agent and SMCMSIFan keep working |
+| `-msiec.dbg` | Enables MSIECToolbox verbose logs (DEBUG build) |
 | `-msiec.beta` | Forces loading on unsupported macOS versions |
 | `-smcmsifan.off` | Disables SMCMSIFan |
-| `-smcmsifan.dbg` | Enables SMCMSIFan DEBUG logs |
+| `-smcmsifan.dbg` | Enables SMCMSIFan verbose logs (DEBUG build) |
