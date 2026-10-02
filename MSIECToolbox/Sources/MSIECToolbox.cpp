@@ -37,20 +37,30 @@ PluginConfiguration ADDPR(config) = {
 // Static members
 // ---------------------------------------------------------------------------
 
-// kextInfo is non-const: onKextLoad() takes a KextInfo* (non-const) — the
-// Lilu API may update loadIndex during the callback. Lifetime is guaranteed
-// by static storage (kext __DATA segment).
+// Target of the writeECField hook. Lilu calls loadKinfo() on every
+// registered KextInfo when its patcher starts, and MachInfo::init()
+// dereferences paths[0] in kernel collection mode (macOS 11+): paths must
+// never be null, even though the binary is then read from memory.
+// sys[Loaded] = true: AppleACPIPlatform is the platform expert and is always
+// loaded before any Lilu plugin, so Lilu must process it as already loaded.
+// kextInfo is non-const: onKextLoad() may update loadIndex.
+const char *MSIECCore::kextPaths[] {
+    "/System/Library/Extensions/AppleACPIPlatform.kext/Contents/MacOS/AppleACPIPlatform",
+};
+
 KernelPatcher::KextInfo MSIECCore::kextInfo {
-    "com.apple.driver.AppleACPIPlatformExpert",
-    nullptr, 0, {}, {},
+    "com.apple.driver.AppleACPIPlatform",
+    kextPaths, arrsize(kextPaths),
+    {true},  // sys[KextInfo::Loaded]
+    {},
     KernelPatcher::KextInfo::Unloaded
 };
 
 mach_vm_address_t               MSIECCore::orgWriteECField  = 0;
 IOLock                         *MSIECCore::ecLock           = nullptr;
-IOLock                         *MSIECCore::stateLock        = nullptr;
-bool                            MSIECCore::speakerMuted     = false;
-bool                            MSIECCore::micMuted         = false;
+_Atomic(bool)                   MSIECCore::speakerMuted     = false;
+_Atomic(bool)                   MSIECCore::micMuted         = false;
+_Atomic(uint32_t)               MSIECCore::hookCallsLogged  = 0;
 _Atomic(bool)                   MSIECCore::hookInstalled    = false;
 _Atomic(IOACPIPlatformDevice *) MSIECCore::ecDevice         = nullptr;
 _Atomic(bool)                   MSIECCore::globalLockUsable = true;
@@ -82,7 +92,7 @@ static bool allocLockAtomic(IOLock **lockPtr, const char *name) {
 }
 
 bool MSIECCore::allocLocks() {
-    return allocLockAtomic(&stateLock, "stateLock") && allocLockAtomic(&ecLock, "ecLock");
+    return allocLockAtomic(&ecLock, "ecLock");
 }
 
 void MSIECCore::setECDevice(IOACPIPlatformDevice *device) {
@@ -150,8 +160,18 @@ void MSIECCore::patcherCallback(void *, KernelPatcher &patcher,
 //
 // Firmware (AML) rewrites 0x2B / 0x2C on its own, e.g. on Fn keys or resume,
 // and would clear the mute LED bit. The hook forces the bit to the state last
-// set by setMuteState(). Runs in ACPI context: it must not take BusGuard
-// (AML may already hold the ACPI global lock here).
+// set by setMuteState().
+//
+// Runs in ACPI context: no BusGuard (AML may hold the ACPI global lock), no
+// mutex, no allocation — atomics only.
+//
+// The signature (offset, value, size) comes from the mangled symbol
+// __ZN20IOACPIPlatformDevice12writeECFieldEjPKvl and has not been checked
+// against Apple's implementation: offset is assumed to be a byte address and
+// size a byte count. The value is only rewritten when the byte also looks
+// like the LED register (firmware base value, LED bit aside); anything else
+// passes through untouched, so a wrong assumption cannot corrupt other EC
+// writes. DEBUG builds log the first calls to confirm the semantics.
 // ---------------------------------------------------------------------------
 
 IOReturn MSIECCore::hookedWriteECField(IOACPIPlatformDevice *device,
@@ -159,30 +179,35 @@ IOReturn MSIECCore::hookedWriteECField(IOACPIPlatformDevice *device,
                                        const void *value,
                                        IOByteCount size)
 {
-    // orgWriteECField is filled by routeMultiple() before the route goes live.
-    if (!orgWriteECField) return kIOReturnInternalError;
-    if (!value)           return kIOReturnBadArgument;
-
     using Fn = IOReturn (*)(IOACPIPlatformDevice *, uint32_t, const void *, IOByteCount);
+    auto org = reinterpret_cast<Fn>(orgWriteECField);
 
-    if ((offset == kMSI_EC_OFFSET_SPEAKER || offset == kMSI_EC_OFFSET_MIC)
-        && size == 1 && stateLock)
+#ifdef DEBUG
+    if (atomic_fetch_add_explicit(&hookCallsLogged, 1, memory_order_relaxed) < 64) {
+        MSIEC_LOG("writeECField: offset=0x%X size=%llu value[0]=0x%02X",
+                  offset, (unsigned long long)size,
+                  value ? *static_cast<const uint8_t *>(value) : 0);
+    }
+#endif
+
+    if (value && size == 1 &&
+        (offset == kMSI_EC_OFFSET_SPEAKER || offset == kMSI_EC_OFFSET_MIC))
     {
-        bool muted;
-        IOLockLock(stateLock);
-        muted = (offset == kMSI_EC_OFFSET_SPEAKER) ? speakerMuted : micMuted;
-        IOLockUnlock(stateLock);
+        bool    isSpeaker = (offset == kMSI_EC_OFFSET_SPEAKER);
+        uint8_t base      = isSpeaker ? kMSI_EC_BASE_SPEAKER : kMSI_EC_BASE_MIC;
+        uint8_t raw       = *static_cast<const uint8_t *>(value);
 
-        uint8_t raw      = *static_cast<const uint8_t *>(value);
-        uint8_t modified = (raw & ~kMSI_EC_BIT_LED) | (muted ? kMSI_EC_BIT_LED : 0);
-
-        MSIEC_LOG("EC write 0x%02X: raw=0x%02X patched=0x%02X muted=%d",
-                   offset, raw, modified, (int)muted);
-
-        return reinterpret_cast<Fn>(orgWriteECField)(device, offset, &modified, size);
+        if ((raw & ~kMSI_EC_BIT_LED) == base) {
+            bool muted = atomic_load_explicit(isSpeaker ? &speakerMuted : &micMuted,
+                                              memory_order_acquire);
+            uint8_t modified = muted ? (raw | kMSI_EC_BIT_LED) : (raw & ~kMSI_EC_BIT_LED);
+            MSIEC_LOG("EC write 0x%02X: raw=0x%02X patched=0x%02X muted=%d",
+                       offset, raw, modified, (int)muted);
+            return org(device, offset, &modified, size);
+        }
     }
 
-    return reinterpret_cast<Fn>(orgWriteECField)(device, offset, value, size);
+    return org(device, offset, value, size);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,12 +337,8 @@ IOReturn MSIECCore::setLEDBit(BusGuard &, uint8_t offset, bool on) {
 }
 
 IOReturn MSIECCore::setMuteState(bool newSpk, bool newMic) {
-    if (!stateLock) return kIOReturnNotReady;
-
-    IOLockLock(stateLock);
-    speakerMuted = newSpk;
-    micMuted     = newMic;
-    IOLockUnlock(stateLock);
+    atomic_store_explicit(&speakerMuted, newSpk, memory_order_release);
+    atomic_store_explicit(&micMuted,     newMic, memory_order_release);
 
     // Always write the LED bits now, hook or not. The hook only rewrites
     // them when firmware happens to write 0x2B / 0x2C, which is rare: without
@@ -341,11 +362,8 @@ IOReturn MSIECCore::setMuteState(bool newSpk, bool newMic) {
 }
 
 IOReturn MSIECCore::getMuteState(bool &outSpk, bool &outMic) {
-    if (!stateLock) return kIOReturnNotReady;
-    IOLockLock(stateLock);
-    outSpk = speakerMuted;
-    outMic = micMuted;
-    IOLockUnlock(stateLock);
+    outSpk = atomic_load_explicit(&speakerMuted, memory_order_acquire);
+    outMic = atomic_load_explicit(&micMuted,     memory_order_acquire);
     return kIOReturnSuccess;
 }
 

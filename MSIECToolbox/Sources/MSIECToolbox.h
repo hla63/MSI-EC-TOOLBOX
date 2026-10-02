@@ -69,11 +69,9 @@ public:
     // Used to take the ACPI global lock around raw port I/O.
     static void setECDevice(IOACPIPlatformDevice *device);
 
-    // stateLock / ecLock: initialised by pluginStart() or MSIECToolboxDriver::start(),
-    // whichever runs first, and never freed (see MSIECToolboxDriver::stop()).
-    //   stateLock: protects speakerMuted / micMuted (short critical section)
-    //   ecLock:    serialises EC bus access (port I/O sequences are non-reentrant)
-    static IOLock *stateLock;
+    // ecLock: serialises EC bus access (port I/O sequences are non-reentrant).
+    // Initialised by pluginStart() or MSIECToolboxDriver::start(), whichever
+    // runs first, and never freed (see MSIECToolboxDriver::stop()).
     static IOLock *ecLock;
 
     static bool allocLocks();
@@ -105,6 +103,7 @@ private:
     // kextInfo lifetime must outlast the Lilu callback; static storage
     // in __DATA guarantees this. Non-const because onKextLoad() may update
     // loadIndex during the callback.
+    static const char *kextPaths[];
     static KernelPatcher::KextInfo kextInfo;
 
     static mach_vm_address_t orgWriteECField;
@@ -119,9 +118,14 @@ private:
     // (firmware without a global lock): raw I/O then only relies on ecLock.
     static _Atomic(bool) globalLockUsable;
 
-    // Protected by stateLock
-    static bool speakerMuted;
-    static bool micMuted;
+    // Read by hookedWriteECField in ACPI context, where taking a mutex is
+    // not allowed: atomics only.
+    static _Atomic(bool) speakerMuted;
+    static _Atomic(bool) micMuted;
+
+    // DEBUG builds log the first calls of the hook so its offset/size
+    // semantics can be checked on real hardware.
+    static _Atomic(uint32_t) hookCallsLogged;
 
     static void patcherCallback(void *user, KernelPatcher &patcher,
                                 size_t index, mach_vm_address_t address, size_t size);
