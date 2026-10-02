@@ -11,27 +11,35 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>SMCMSIFan</string>
+    <string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key>
     <string>KEXT</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>$(MODULE_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>$(MODULE_VERSION)</string>
     <key>NSHumanReadableCopyright</key>
     <string>MSI Modern 15 A10M — VirtualSMC fan plugin</string>
     <key>OSBundleCompatibleVersion</key>
-    <string>5</string>
+    <string>1.0.0</string>
     <key>OSBundleLibraries</key>
     <dict>
-        <key>com.apple.kpi.iokit</key>
-        <string>8.0.0</string>
-        <key>com.apple.kpi.libkern</key>
-        <string>8.0.0</string>
         <key>as.vit9696.Lilu</key>
         <string>1.2.0</string>
         <key>as.vit9696.VirtualSMC</key>
         <string>1.0.0</string>
+        <key>com.apple.kpi.bsd</key>
+        <string>10.0.0</string>
+        <key>com.apple.kpi.dsep</key>
+        <string>10.0.0</string>
+        <key>com.apple.kpi.iokit</key>
+        <string>10.0.0</string>
+        <key>com.apple.kpi.libkern</key>
+        <string>10.0.0</string>
+        <key>com.apple.kpi.mach</key>
+        <string>10.0.0</string>
+        <key>com.apple.kpi.unsupported</key>
+        <string>10.0.0</string>
     </dict>
     <key>OSBundleRequired</key>
     <string>Root</string>
@@ -42,7 +50,9 @@
             <key>CFBundleIdentifier</key>
             <string>com.msi.SMCMSIFan</string>
             <key>IOClass</key>
-            <string>IOService</string>
+            <string>$(PRODUCT_NAME)</string>
+            <key>IOMatchCategory</key>
+            <string>$(PRODUCT_NAME)</string>
             <key>IOProviderClass</key>
             <string>IOResources</string>
             <key>IOResourceMatch</key>

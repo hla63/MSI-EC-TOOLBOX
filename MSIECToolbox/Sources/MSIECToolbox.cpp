@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // MSIECToolbox.cpp
 //
-// Lilu plugin — mute LED control for MSI Modern 15
+// Lilu plugin — EC control for MSI Modern 15
 // Hook: IOACPIPlatformDevice::writeECField (offsets 0x2B / 0x2C, bit 0x04)
-// Fallback: raw ACPI EC port I/O when hook is not installed
+// EC access: raw ACPI EC port I/O, serialised by MSIECCore::BusGuard
 //
 // Tested: Lilu 1.7.1, macOS 14 Sonoma → macOS 26 Tahoe
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ static const char *bootargBeta[]  = { "-msiec.beta" };
 
 PluginConfiguration ADDPR(config) = {
     xStringify(PRODUCT_NAME),
-    parseModuleVersion("3.1.9"),
+    parseModuleVersion(xStringify(MODULE_VERSION)),
     // AllowNormal | AllowInstallerRecovery only.
     // AllowSafeMode intentionally omitted: kernel patches must not apply in
     // safe boot — an unlit LED is acceptable in that context.
@@ -30,7 +30,7 @@ PluginConfiguration ADDPR(config) = {
     bootargBeta,  arrsize(bootargBeta),
     KernelVersion::Sonoma,  // macOS 14 — minimum supported
     KernelVersion::Tahoe,   // macOS 26 — defined natively in Lilu 1.7.1
-    []() { MSIECToolbox::pluginStart(); }
+    []() { MSIECCore::pluginStart(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -40,25 +40,28 @@ PluginConfiguration ADDPR(config) = {
 // kextInfo is non-const: onKextLoad() takes a KextInfo* (non-const) — the
 // Lilu API may update loadIndex during the callback. Lifetime is guaranteed
 // by static storage (kext __DATA segment).
-KernelPatcher::KextInfo MSIECToolbox::kextInfo {
+KernelPatcher::KextInfo MSIECCore::kextInfo {
     "com.apple.driver.AppleACPIPlatformExpert",
     nullptr, 0, {}, {},
     KernelPatcher::KextInfo::Unloaded
 };
 
-mach_vm_address_t MSIECToolbox::orgWriteECField = 0;
-IOLock           *MSIECToolbox::ecLock           = nullptr;
-IOLock           *MSIECToolbox::stateLock        = nullptr;
-bool              MSIECToolbox::speakerMuted      = false;
-bool              MSIECToolbox::micMuted          = false;
-// hookInstalled is written from patcherCallback() (Lilu thread) and read
-// from setMuteState() (IOKit UserClient thread) without a lock.
-// On x86_64 bool is de-facto atomic, but that is strict C++ UB.
-// _Atomic guarantees visibility across threads without measurable overhead.
-_Atomic(bool)     MSIECToolbox::hookInstalled     = false;
+mach_vm_address_t               MSIECCore::orgWriteECField  = 0;
+IOLock                         *MSIECCore::ecLock           = nullptr;
+IOLock                         *MSIECCore::stateLock        = nullptr;
+bool                            MSIECCore::speakerMuted     = false;
+bool                            MSIECCore::micMuted         = false;
+_Atomic(bool)                   MSIECCore::hookInstalled    = false;
+_Atomic(IOACPIPlatformDevice *) MSIECCore::ecDevice         = nullptr;
+_Atomic(bool)                   MSIECCore::globalLockUsable = true;
+
+// Upper bound on how long the ACPI global lock may be awaited. AML holds it
+// only for the duration of a field access, so a longer wait means firmware
+// is stuck — give up rather than stall the caller.
+static const mach_timespec_t kGlobalLockTimeout = { 0, 50 * 1000 * 1000 };  // 50 ms
 
 // ---------------------------------------------------------------------------
-// pluginStart
+// Lock allocation
 // ---------------------------------------------------------------------------
 
 // Allocates an IOLock atomically via CAS — prevents double-alloc if
@@ -66,102 +69,104 @@ _Atomic(bool)     MSIECToolbox::hookInstalled     = false;
 // concurrently at boot.
 // Pattern: null check → alloc outside lock → CAS(nullptr → candidate).
 // If another thread wins the race, free our candidate.
-static void allocLockAtomic(IOLock **lockPtr, const char *name) {
+static bool allocLockAtomic(IOLock **lockPtr, const char *name) {
     if (!*lockPtr) {
         IOLock *candidate = IOLockAlloc();
-        if (!candidate) { MSIEC_ERR("%s IOLockAlloc failed", name); return; }
+        if (!candidate) { MSIEC_ERR("%s IOLockAlloc failed", name); return false; }
         if (!OSCompareAndSwapPtr(nullptr, candidate, lockPtr)) {
             // Another thread already installed the lock — discard ours
             IOLockFree(candidate);
         }
     }
+    return true;
 }
 
-void MSIECToolbox::pluginStart() {
-    // Atomic lock initialisation via CAS.
-    // Prevents double-alloc if pluginStart() and Driver::start() run
-    // simultaneously at boot.
-    allocLockAtomic(&stateLock, "stateLock");
-    if (!stateLock) return;
-    allocLockAtomic(&ecLock, "ecLock");
-    if (!ecLock) return;
+bool MSIECCore::allocLocks() {
+    return allocLockAtomic(&stateLock, "stateLock") && allocLockAtomic(&ecLock, "ecLock");
+}
+
+void MSIECCore::setECDevice(IOACPIPlatformDevice *device) {
+    if (!device) return;
+    device->retain();  // never released: BusGuard may use it until shutdown
+    IOACPIPlatformDevice *expected = nullptr;
+    if (!atomic_compare_exchange_strong(&ecDevice, &expected, device))
+        device->release();
+}
+
+// ---------------------------------------------------------------------------
+// pluginStart
+// ---------------------------------------------------------------------------
+
+void MSIECCore::pluginStart() {
+    if (!allocLocks()) return;
 
     // onKextLoad() instead of onKextLoadForce().
-    // onKextLoadForce() would panic the kernel on registration failure,
-    // defeating the purpose of the raw EC I/O fallback.
-    // onKextLoad() logs the error — the plugin continues and setMuteState()
-    // falls back to fallbackECWrite() (hookInstalled remains false).
+    // onKextLoadForce() would panic the kernel on registration failure.
+    // onKextLoad() logs the error — the plugin continues and LED state is
+    // still driven by setMuteState()'s direct EC writes.
     auto err = lilu.onKextLoad(&kextInfo, 1,
         [](void *user, KernelPatcher &patcher, size_t index,
            mach_vm_address_t address, size_t size) {
             patcherCallback(user, patcher, index, address, size);
         }, nullptr);
 
-    if (err != LiluAPI::Error::NoError) {
-        MSIEC_ERR("onKextLoad failed (%d) – fallback raw I/O only", (int)err);
-        // hookInstalled stays false: setMuteState() will use fallbackECWrite()
-    }
+    if (err != LiluAPI::Error::NoError)
+        MSIEC_ERR("onKextLoad failed (%d) – writeECField hook unavailable", (int)err);
 }
 
 // ---------------------------------------------------------------------------
 // patcherCallback
 // ---------------------------------------------------------------------------
 
-void MSIECToolbox::patcherCallback(void *, KernelPatcher &patcher,
-                                  size_t index, mach_vm_address_t, size_t)
+void MSIECCore::patcherCallback(void *, KernelPatcher &patcher,
+                                size_t index, mach_vm_address_t, size_t)
 {
     if (index != kextInfo.loadIndex) return;
 
-    // Single candidate — correct C++ mangled symbol name.
-    // Using only one candidate avoids polluting logs with unresolvable names.
-    static const char *const candidates[] = {
-        "__ZN20IOACPIPlatformDevice12writeECFieldEjPKvl",
-    };
+    static const char *const sym = "__ZN20IOACPIPlatformDevice12writeECFieldEjPKvl";
 
-    for (const char *sym : candidates) {
-        mach_vm_address_t addr = patcher.solveSymbol(kextInfo.loadIndex, sym);
-        if (addr) {
-            MSIEC_LOG("Symbol resolved: %s @ 0x%llX", sym, addr);
-            KernelPatcher::RouteRequest route{sym,
-                reinterpret_cast<mach_vm_address_t>(hookedWriteECField),
-                orgWriteECField};
-            if (patcher.routeMultiple(kextInfo.loadIndex, &route, 1)) {
-                atomic_store_explicit(&hookInstalled, true, memory_order_release);
-                MSIEC_LOG("Hook installed successfully");
-            } else {
-                MSIEC_ERR("Hook installation failed");
-                patcher.clearError();
-            }
-            return;
-        }
+    mach_vm_address_t addr = patcher.solveSymbol(kextInfo.loadIndex, sym);
+    if (!addr) {
         patcher.clearError();
+        MSIEC_ERR("writeECField not resolved – hook unavailable");
+        return;
     }
 
-    MSIEC_ERR("No EC write symbol resolved – raw I/O fallback active");
+    MSIEC_LOG("Symbol resolved: %s @ 0x%llX", sym, addr);
+    KernelPatcher::RouteRequest route{sym,
+        reinterpret_cast<mach_vm_address_t>(hookedWriteECField),
+        orgWriteECField};
+    if (patcher.routeMultiple(kextInfo.loadIndex, &route, 1)) {
+        atomic_store_explicit(&hookInstalled, true, memory_order_release);
+        MSIEC_LOG("Hook installed successfully");
+    } else {
+        MSIEC_ERR("Hook installation failed");
+        patcher.clearError();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // hookedWriteECField
+//
+// Firmware (AML) rewrites 0x2B / 0x2C on its own, e.g. on Fn keys or resume,
+// and would clear the mute LED bit. The hook forces the bit to the state last
+// set by setMuteState(). Runs in ACPI context: it must not take BusGuard
+// (AML may already hold the ACPI global lock here).
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::hookedWriteECField(IOACPIPlatformDevice *device,
-                                         uint32_t offset,
-                                         const void *value,
-                                         IOByteCount size)
+IOReturn MSIECCore::hookedWriteECField(IOACPIPlatformDevice *device,
+                                       uint32_t offset,
+                                       const void *value,
+                                       IOByteCount size)
 {
-    // orgWriteECField: must be non-null — a null call would kernel panic.
-    // routeMultiple() fills orgWriteECField before patching the vtable,
-    // so it is always valid if the hook was installed successfully.
-    // device: not checked — always non-null (it is the ACPI `this` dispatched
-    // by IOKit; a null device would indicate a corrupted kernel state).
-    // value: checked here for the general case (already checked in mic/spk block).
+    // orgWriteECField is filled by routeMultiple() before the route goes live.
     if (!orgWriteECField) return kIOReturnInternalError;
     if (!value)           return kIOReturnBadArgument;
 
     using Fn = IOReturn (*)(IOACPIPlatformDevice *, uint32_t, const void *, IOByteCount);
 
     if ((offset == kMSI_EC_OFFSET_SPEAKER || offset == kMSI_EC_OFFSET_MIC)
-        && size == 1 && value && stateLock)
+        && size == 1 && stateLock)
     {
         bool muted;
         IOLockLock(stateLock);
@@ -181,10 +186,132 @@ IOReturn MSIECToolbox::hookedWriteECField(IOACPIPlatformDevice *device,
 }
 
 // ---------------------------------------------------------------------------
-// setMuteState — called by MSIECToolboxUserClient
+// BusGuard — exclusive EC bus ownership
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setMuteState(bool newSpk, bool newMic) {
+MSIECCore::BusGuard::BusGuard() {
+    heldLock = ecLock;
+    if (!heldLock) return;  // st stays kIOReturnNotReady
+    IOLockLock(heldLock);
+
+    device = atomic_load_explicit(&ecDevice, memory_order_acquire);
+    if (device && atomic_load_explicit(&globalLockUsable, memory_order_relaxed)) {
+        IOReturn r = device->acquireGlobalLock(&globalLockToken, &kGlobalLockTimeout);
+        if (r == kIOReturnSuccess) {
+            haveGlobalLock = true;
+        } else if (r == kIOReturnTimeout) {
+            // AML is holding the lock: do not touch the ports concurrently.
+            MSIEC_ERR("BusGuard: ACPI global lock timeout");
+            st = kIOReturnBusy;
+            return;
+        } else {
+            // No global lock on this platform: ecLock alone still serialises
+            // this kext and SMCMSIFan.
+            atomic_store_explicit(&globalLockUsable, false, memory_order_relaxed);
+            MSIEC_ERR("BusGuard: acquireGlobalLock unsupported (0x%08X), using ecLock only", r);
+        }
+    }
+    st = kIOReturnSuccess;
+}
+
+MSIECCore::BusGuard::~BusGuard() {
+    if (!heldLock) return;
+    if (haveGlobalLock)
+        device->releaseGlobalLock(globalLockToken);
+    IOLockUnlock(heldLock);
+}
+
+// ---------------------------------------------------------------------------
+// Raw EC port I/O — ACPI spec: command port 0x66, data port 0x62
+// ---------------------------------------------------------------------------
+
+// Waits for IBF (Input Buffer Full) to clear: EC ready to receive a command.
+bool MSIECCore::ecWaitIBF() {
+    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 × 10µs)
+        uint8_t status;
+        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
+        if (!(status & 0x02)) return true;
+        IODelay(10);
+    }
+    MSIEC_ERR("ecWaitIBF: timeout (10ms)");
+    return false;
+}
+
+// Waits for OBF (Output Buffer Full) to set: data available for reading.
+bool MSIECCore::ecWaitOBF() {
+    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 × 10µs)
+        uint8_t status;
+        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
+        if (status & 0x01) return true;
+        IODelay(10);
+    }
+    MSIEC_ERR("ecWaitOBF: timeout (10ms)");
+    return false;
+}
+
+IOReturn MSIECCore::ecReadLocked(uint8_t offset, uint8_t &outValue) {
+    if (!ecWaitIBF()) return kIOReturnTimeout;
+    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
+    if (!ecWaitIBF()) return kIOReturnTimeout;
+    asm volatile("outb %0, %1" :: "a"(offset), "Nd"(kECDataPort));
+    if (!ecWaitOBF()) return kIOReturnTimeout;
+    asm volatile("inb %1, %0" : "=a"(outValue) : "Nd"(kECDataPort));
+    return kIOReturnSuccess;
+}
+
+IOReturn MSIECCore::ecWriteLocked(uint8_t offset, uint8_t value) {
+    if (!ecWaitIBF()) return kIOReturnTimeout;
+    asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
+    if (!ecWaitIBF()) return kIOReturnTimeout;
+    asm volatile("outb %0, %1" :: "a"(offset), "Nd"(kECDataPort));
+    if (!ecWaitIBF()) return kIOReturnTimeout;
+    asm volatile("outb %0, %1" :: "a"(value), "Nd"(kECDataPort));
+    return kIOReturnSuccess;
+}
+
+IOReturn MSIECCore::ecRead(uint32_t offset, uint8_t &outValue) {
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+    return ecReadLocked(static_cast<uint8_t>(offset), outValue);
+}
+
+IOReturn MSIECCore::ecWrite(uint32_t offset, uint8_t value) {
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+    IOReturn ret = ecWriteLocked(static_cast<uint8_t>(offset), value);
+    MSIEC_LOG("ecWrite: offset=0x%02X val=0x%02X ret=0x%08X", offset, value, ret);
+    return ret;
+}
+
+IOReturn MSIECCore::readRegisters(const uint8_t *offsets, uint8_t *outValues, uint32_t count) {
+    if (!offsets || !outValues || count == 0 || count > kMSIECMaxBatchRead)
+        return kIOReturnBadArgument;
+
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+    for (uint32_t i = 0; i < count; i++) {
+        IOReturn r = ecReadLocked(offsets[i], outValues[i]);
+        if (r != kIOReturnSuccess) return r;
+    }
+    return kIOReturnSuccess;
+}
+
+// ---------------------------------------------------------------------------
+// Mute LEDs
+// ---------------------------------------------------------------------------
+
+// Read-modify-write of the LED bit only: the other bits of 0x2B / 0x2C
+// belong to firmware.
+IOReturn MSIECCore::setLEDBit(BusGuard &, uint8_t offset, bool on) {
+    uint8_t cur = 0;
+    IOReturn r = ecReadLocked(offset, cur);
+    if (r != kIOReturnSuccess) return r;
+    uint8_t want = on ? (cur | kMSI_EC_BIT_LED) : (cur & ~kMSI_EC_BIT_LED);
+    if (want == cur) return kIOReturnSuccess;
+    return ecWriteLocked(offset, want);
+}
+
+IOReturn MSIECCore::setMuteState(bool newSpk, bool newMic) {
     if (!stateLock) return kIOReturnNotReady;
 
     IOLockLock(stateLock);
@@ -192,36 +319,28 @@ IOReturn MSIECToolbox::setMuteState(bool newSpk, bool newMic) {
     micMuted     = newMic;
     IOLockUnlock(stateLock);
 
+    // Always write the LED bits now, hook or not. The hook only rewrites
+    // them when firmware happens to write 0x2B / 0x2C, which is rare: without
+    // a direct write the agent's 500ms poll would read the old bit back and
+    // revert the CoreAudio mute it just applied.
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+
+    IOReturn r1 = setLEDBit(bus, kMSI_EC_OFFSET_SPEAKER, newSpk);
+    IOReturn r2 = setLEDBit(bus, kMSI_EC_OFFSET_MIC,     newMic);
+
+    if (r1 != kIOReturnSuccess) MSIEC_ERR("setMuteState speaker LED: 0x%08X", r1);
+    if (r2 != kIOReturnSuccess) MSIEC_ERR("setMuteState mic LED: 0x%08X", r2);
+
     MSIEC_LOG("setMuteState: speaker=%d mic=%d hookInstalled=%d",
                (int)newSpk, (int)newMic,
                (int)atomic_load_explicit(&hookInstalled, memory_order_acquire));
 
-    // If the hook is not installed, write directly via raw EC I/O.
-    // EC values confirmed by dump on MSI Modern 15:
-    //   0x2C (speaker): base=0xE0, muted=0xE4, active=0xE0
-    //   0x2B (mic):     base=0x80, muted=0x84, active=0x80
-    if (!atomic_load_explicit(&hookInstalled, memory_order_acquire)) {
-        uint8_t spkVal = kMSI_EC_BASE_SPEAKER | (newSpk ? kMSI_EC_BIT_LED : 0);
-        uint8_t micVal = kMSI_EC_BASE_MIC     | (newMic ? kMSI_EC_BIT_LED : 0);
-
-        IOReturn r1 = fallbackECWrite(kMSI_EC_OFFSET_SPEAKER, spkVal);
-        IOReturn r2 = fallbackECWrite(kMSI_EC_OFFSET_MIC,     micVal);
-
-        if (r1 != kIOReturnSuccess) MSIEC_ERR("fallbackECWrite speaker: 0x%08X", r1);
-        if (r2 != kIOReturnSuccess) MSIEC_ERR("fallbackECWrite mic: 0x%08X", r2);
-
-        return (r1 == kIOReturnSuccess && r2 == kIOReturnSuccess)
-            ? kIOReturnSuccess : kIOReturnIOError;
-    }
-
-    return kIOReturnSuccess;
+    return (r1 == kIOReturnSuccess && r2 == kIOReturnSuccess)
+        ? kIOReturnSuccess : kIOReturnIOError;
 }
 
-// ---------------------------------------------------------------------------
-// getMuteState
-// ---------------------------------------------------------------------------
-
-IOReturn MSIECToolbox::getMuteState(bool &outSpk, bool &outMic) {
+IOReturn MSIECCore::getMuteState(bool &outSpk, bool &outMic) {
     if (!stateLock) return kIOReturnNotReady;
     IOLockLock(stateLock);
     outSpk = speakerMuted;
@@ -231,12 +350,13 @@ IOReturn MSIECToolbox::getMuteState(bool &outSpk, bool &outMic) {
 }
 
 // ---------------------------------------------------------------------------
-// dumpEC — reads all 256 EC registers via RD_EC (opcode 0x80)
-// Called by MSIECToolboxUserClient (selector kMSIDumpEC).
+// dumpEC — reads all 256 EC registers
+// One BusGuard per register: holding the ACPI global lock for the whole dump
+// would block firmware EC accesses (battery, thermal) for ~100ms or more.
 // Returns kIOReturnTimeout if too many registers fail to respond.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::dumpEC(uint8_t outData[256]) {
+IOReturn MSIECCore::dumpEC(uint8_t outData[256]) {
     if (!outData) return kIOReturnBadArgument;
 
     // Abort threshold: 32 failures out of 256 (12.5%) indicates an
@@ -247,7 +367,7 @@ IOReturn MSIECToolbox::dumpEC(uint8_t outData[256]) {
 
     for (int i = 0; i < 256; i++) {
         uint8_t val = 0;
-        IOReturn r = fallbackECRead(static_cast<uint32_t>(i), val);
+        IOReturn r = ecRead(static_cast<uint32_t>(i), val);
         if (r != kIOReturnSuccess) {
             MSIEC_ERR("dumpEC: read offset 0x%02X failed (0x%08X)", i, r);
             outData[i] = 0xFF;
@@ -265,82 +385,6 @@ IOReturn MSIECToolbox::dumpEC(uint8_t outData[256]) {
 }
 
 // ---------------------------------------------------------------------------
-// EC I/O helpers
-// ---------------------------------------------------------------------------
-
-// Waits for IBF (Input Buffer Full) to clear: EC ready to receive a command.
-bool MSIECToolbox::ecWaitIBF() {
-    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 × 10µs)
-        uint8_t status;
-        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
-        if (!(status & 0x02)) return true;
-        IODelay(10);
-    }
-    MSIEC_ERR("ecWaitIBF: timeout (10ms)");
-    return false;
-}
-
-// Waits for OBF (Output Buffer Full) to set: data available for reading.
-bool MSIECToolbox::ecWaitOBF() {
-    for (int i = 0; i < 1000; i++) {  // 10ms max (1000 × 10µs)
-        uint8_t status;
-        asm volatile("inb %1, %0" : "=a"(status) : "Nd"(kECCommandPort));
-        if (status & 0x01) return true;
-        IODelay(10);
-    }
-    MSIEC_ERR("ecWaitOBF: timeout (10ms)");
-    return false;
-}
-
-// ---------------------------------------------------------------------------
-// fallbackECRead — raw ACPI EC port I/O
-// Command port 0x66, data port 0x62, opcode RD_EC = 0x80
-// ---------------------------------------------------------------------------
-
-IOReturn MSIECToolbox::fallbackECRead(uint32_t offset, uint8_t &outValue) {
-    // The EC bus is non-reentrant — only one thread at a time.
-    // Without a mutex, two concurrent sequences (cmd+offset+data) can
-    // interleave and corrupt the EC state or lock it indefinitely.
-    if (!ecLock) return kIOReturnNotReady;
-    IOLockLock(ecLock);
-
-    IOReturn ret = kIOReturnSuccess;
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)offset), "Nd"(kECDataPort));
-    if (!ecWaitOBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("inb %1, %0" : "=a"(outValue) : "Nd"(kECDataPort));
-
-done:
-    IOLockUnlock(ecLock);
-    return ret;
-}
-
-// ---------------------------------------------------------------------------
-// fallbackECWrite — raw ACPI EC port I/O
-// Command port 0x66, data port 0x62, opcode WR_EC = 0x81
-// ---------------------------------------------------------------------------
-
-IOReturn MSIECToolbox::fallbackECWrite(uint32_t offset, uint8_t value) {
-    if (!ecLock) return kIOReturnNotReady;
-    IOLockLock(ecLock);
-
-    IOReturn ret = kIOReturnSuccess;
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)offset), "Nd"(kECDataPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(value), "Nd"(kECDataPort));
-
-done:
-    MSIEC_LOG("fallbackECWrite: offset=0x%02X val=0x%02X ret=0x%08X", offset, value, ret);
-    IOLockUnlock(ecLock);
-    return ret;
-}
-
-// ---------------------------------------------------------------------------
 // setFanMode — sets the fan control profile via EC 0xF4
 //
 // auto     (0x0D): EC drives fans according to its internal curve
@@ -352,7 +396,7 @@ done:
 // the firmware default curve.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setFanMode(MSIFanModeValue mode) {
+IOReturn MSIECCore::setFanMode(MSIFanModeValue mode) {
     uint8_t ecVal;
     switch (mode) {
         case kMSIFanModeAuto:     ecVal = kMSI_EC_FAN_AUTO;     break;
@@ -361,7 +405,7 @@ IOReturn MSIECToolbox::setFanMode(MSIFanModeValue mode) {
         default: return kIOReturnBadArgument;
     }
     MSIEC_LOG("setFanMode: mode=%d -> EC[0xF4]=0x%02X", (int)mode, ecVal);
-    return fallbackECWrite(kMSI_EC_FAN_MODE_ADDR, ecVal);
+    return ecWrite(kMSI_EC_FAN_MODE_ADDR, ecVal);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,25 +419,25 @@ IOReturn MSIECToolbox::setFanMode(MSIFanModeValue mode) {
 // requires further validation before being added to the UI.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setBatteryCharge(uint8_t percent) {
+IOReturn MSIECCore::setBatteryCharge(uint8_t percent) {
     uint8_t ecVal;
     switch (percent) {
-        case 80:  ecVal = 0x50; break;
-        case 100: ecVal = 0x64; break;
+        case 80:  ecVal = kMSI_EC_BATTERY_CHARGE_80;  break;
+        case 100: ecVal = kMSI_EC_BATTERY_CHARGE_100; break;
         default:  return kIOReturnBadArgument;
     }
     MSIEC_LOG("setBatteryCharge: %d%% -> EC[0xEF]=0x%02X", (int)percent, ecVal);
-    return fallbackECWrite(kMSI_EC_BATTERY_CHARGE_ADDR, ecVal);
+    return ecWrite(kMSI_EC_BATTERY_CHARGE_ADDR, ecVal);
 }
 
-IOReturn MSIECToolbox::getBatteryCharge(uint8_t &outPercent) {
+IOReturn MSIECCore::getBatteryCharge(uint8_t &outPercent) {
     uint8_t raw = 0;
-    IOReturn r = fallbackECRead(kMSI_EC_BATTERY_CHARGE_ADDR, raw);
+    IOReturn r = ecRead(kMSI_EC_BATTERY_CHARGE_ADDR, raw);
     if (r != kIOReturnSuccess) return r;
     switch (raw) {
-        case 0x50: outPercent = 80;  break;
-        case 0x64: outPercent = 100; break;
-        default:   outPercent = 100; break;  // unknown value → safe default
+        case kMSI_EC_BATTERY_CHARGE_80:  outPercent = 80;  break;
+        case kMSI_EC_BATTERY_CHARGE_100: outPercent = 100; break;
+        default:                         outPercent = 100; break;  // unknown value → safe default
     }
     MSIEC_LOG("getBatteryCharge: EC[0xEF]=0x%02X -> %d%%", raw, (int)outPercent);
     return kIOReturnSuccess;
@@ -409,46 +453,39 @@ IOReturn MSIECToolbox::getBatteryCharge(uint8_t &outPercent) {
 //   - Temperatures: strictly increasing order, range [20, 95] °C
 //   - Speeds:       non-decreasing order, range [0, 100] %
 //   - Speed[0] = 0 is valid (fan off below first temperature threshold)
+// Safety floor (MSIECToolboxShared.h): >= 50 % from 70 °C and on the last point.
 //
 // Only effective when fan mode is kMSIFanModeAdvanced.
 // In auto or silent mode the EC ignores the custom curve.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setFanCurve(const MSIFanCurve &curve) {
-    for (int i = 0; i < 6; i++) {
+IOReturn MSIECCore::setFanCurve(const MSIFanCurve &curve) {
+    for (int i = 0; i < kMSI_EC_FAN_CURVE_POINTS; i++) {
         if (curve.temps[i]  < 20 || curve.temps[i]  > 95) return kIOReturnBadArgument;
         if (curve.speeds[i] > 100)                         return kIOReturnBadArgument;
         if (i > 0 && curve.temps[i]  <= curve.temps[i-1]) return kIOReturnBadArgument;
         if (i > 0 && curve.speeds[i] <  curve.speeds[i-1])return kIOReturnBadArgument;
+        if (curve.temps[i] >= kMSIFanCurveFloorTempC &&
+            curve.speeds[i] < kMSIFanCurveFloorSpeedPct)  return kIOReturnBadArgument;
     }
+    if (curve.speeds[kMSI_EC_FAN_CURVE_POINTS - 1] < kMSIFanCurveFloorSpeedPct)
+        return kIOReturnBadArgument;
 
-    // Hold ecLock across all 12 writes to prevent a partial update.
-    // If any write fails mid-way (e.g. EC timeout), the curve registers
-    // would be in an inconsistent state (some temps written, no speeds).
-    // Inline the port I/O sequence directly, as fallbackECWrite() also
-    // acquires ecLock and we must not nest locks.
-    if (!ecLock) return kIOReturnNotReady;
-    IOLockLock(ecLock);
+    // One BusGuard across all 12 writes so no other EC access interleaves
+    // with the curve update.
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
 
     IOReturn ret = kIOReturnSuccess;
-    for (int i = 0; i < 6 && ret == kIOReturnSuccess; i++) {
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"((uint8_t)(kMSI_EC_FAN_CPU_TEMP_BASE + i)), "Nd"(kECDataPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: temp[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"(curve.temps[i]), "Nd"(kECDataPort));
+    for (int i = 0; i < kMSI_EC_FAN_CURVE_POINTS && ret == kIOReturnSuccess; i++) {
+        ret = ecWriteLocked(kMSI_EC_FAN_CPU_TEMP_BASE + i, curve.temps[i]);
+        if (ret != kIOReturnSuccess) MSIEC_ERR("setFanCurve: temp[%d] write timeout", i);
     }
-    for (int i = 0; i < 6 && ret == kIOReturnSuccess; i++) {
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"((uint8_t)(kMSI_EC_FAN_CPU_SPD_BASE + i)), "Nd"(kECDataPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; MSIEC_ERR("setFanCurve: speed[%d] write timeout", i); break; }
-        asm volatile("outb %0, %1" :: "a"(curve.speeds[i]), "Nd"(kECDataPort));
+    for (int i = 0; i < kMSI_EC_FAN_CURVE_POINTS && ret == kIOReturnSuccess; i++) {
+        ret = ecWriteLocked(kMSI_EC_FAN_CPU_SPD_BASE + i, curve.speeds[i]);
+        if (ret != kIOReturnSuccess) MSIEC_ERR("setFanCurve: speed[%d] write timeout", i);
     }
 
-    IOLockUnlock(ecLock);
     if (ret != kIOReturnSuccess) {
         MSIEC_ERR("setFanCurve: aborted, EC curve registers may be inconsistent (0x%08X)", ret);
         return ret;
@@ -461,13 +498,16 @@ IOReturn MSIECToolbox::setFanCurve(const MSIFanCurve &curve) {
     return kIOReturnSuccess;
 }
 
-IOReturn MSIECToolbox::getFanCurve(MSIFanCurve &out) {
-    for (int i = 0; i < 6; i++) {
-        IOReturn r = fallbackECRead(kMSI_EC_FAN_CPU_TEMP_BASE + i, out.temps[i]);
+IOReturn MSIECCore::getFanCurve(MSIFanCurve &out) {
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+
+    for (int i = 0; i < kMSI_EC_FAN_CURVE_POINTS; i++) {
+        IOReturn r = ecReadLocked(kMSI_EC_FAN_CPU_TEMP_BASE + i, out.temps[i]);
         if (r != kIOReturnSuccess) return r;
     }
-    for (int i = 0; i < 6; i++) {
-        IOReturn r = fallbackECRead(kMSI_EC_FAN_CPU_SPD_BASE + i, out.speeds[i]);
+    for (int i = 0; i < kMSI_EC_FAN_CURVE_POINTS; i++) {
+        IOReturn r = ecReadLocked(kMSI_EC_FAN_CPU_SPD_BASE + i, out.speeds[i]);
         if (r != kIOReturnSuccess) return r;
     }
     MSIEC_LOG("getFanCurve: T=%d/%d/%d/%d/%d/%d S=%d/%d/%d/%d/%d/%d",
@@ -486,16 +526,16 @@ IOReturn MSIECToolbox::getFanCurve(MSIFanCurve &out) {
 // The value survives sleep but is reset to off by the firmware at boot.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setKbBacklight(uint8_t level) {
+IOReturn MSIECCore::setKbBacklight(uint8_t level) {
     if (level > 3) return kIOReturnBadArgument;
     uint8_t ecVal = kMSI_EC_KB_BACKLIGHT_OFF + level;  // 0x80 + level
     MSIEC_LOG("setKbBacklight: level=%d -> EC[0xF3]=0x%02X", (int)level, ecVal);
-    return fallbackECWrite(kMSI_EC_KB_BACKLIGHT_ADDR, ecVal);
+    return ecWrite(kMSI_EC_KB_BACKLIGHT_ADDR, ecVal);
 }
 
-IOReturn MSIECToolbox::getKbBacklight(uint8_t &outLevel) {
+IOReturn MSIECCore::getKbBacklight(uint8_t &outLevel) {
     uint8_t raw = 0;
-    IOReturn r = fallbackECRead(kMSI_EC_KB_BACKLIGHT_ADDR, raw);
+    IOReturn r = ecRead(kMSI_EC_KB_BACKLIGHT_ADDR, raw);
     if (r != kIOReturnSuccess) return r;
     outLevel = (raw >= kMSI_EC_KB_BACKLIGHT_OFF && raw <= kMSI_EC_KB_BACKLIGHT_MAX)
                ? (raw - kMSI_EC_KB_BACKLIGHT_OFF)
@@ -506,46 +546,26 @@ IOReturn MSIECToolbox::getKbBacklight(uint8_t &outLevel) {
 // ---------------------------------------------------------------------------
 // setCoolerBoost — forces all fans to 100% via EC 0x98 bit 7
 //
-// Read-modify-write to preserve bits 0–6 (unknown firmware use).
-// The entire sequence is held under ecLock to prevent a concurrent
-// getSystemState() read from interleaving between the read and write.
+// Read-modify-write to preserve bits 0–6 (unknown firmware use), under a
+// single BusGuard so nothing can write 0x98 between the read and the write.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setCoolerBoost(bool enable) {
-    if (!ecLock) return kIOReturnNotReady;
-    IOLockLock(ecLock);
+IOReturn MSIECCore::setCoolerBoost(bool enable) {
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
 
-    IOReturn ret = kIOReturnSuccess;
     uint8_t current = 0;
+    IOReturn ret = ecReadLocked(kMSI_EC_COOLER_BOOST_ADDR, current);
+    if (ret != kIOReturnSuccess) return ret;
 
-    // Direct read (ecLock already held — do not call fallbackECRead here)
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"(kECOpRead), "Nd"(kECCommandPort));
-    if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("outb %0, %1" :: "a"((uint8_t)kMSI_EC_COOLER_BOOST_ADDR), "Nd"(kECDataPort));
-    if (!ecWaitOBF()) { ret = kIOReturnTimeout; goto done; }
-    asm volatile("inb %1, %0" : "=a"(current) : "Nd"(kECDataPort));
+    uint8_t newVal = enable
+        ? (current |  kMSI_EC_COOLER_BOOST_MASK)
+        : (current & ~kMSI_EC_COOLER_BOOST_MASK);
 
-    {
-        uint8_t newVal = enable
-            ? (current |  kMSI_EC_COOLER_BOOST_MASK)
-            : (current & ~kMSI_EC_COOLER_BOOST_MASK);
+    MSIEC_LOG("setCoolerBoost: %s EC[0x98]: 0x%02X -> 0x%02X",
+               enable ? "ON" : "OFF", current, newVal);
 
-        MSIEC_LOG("setCoolerBoost: %s EC[0x98]: 0x%02X -> 0x%02X",
-                   enable ? "ON" : "OFF", current, newVal);
-
-        // Direct write (ecLock still held)
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-        asm volatile("outb %0, %1" :: "a"(kECOpWrite), "Nd"(kECCommandPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-        asm volatile("outb %0, %1" :: "a"((uint8_t)kMSI_EC_COOLER_BOOST_ADDR), "Nd"(kECDataPort));
-        if (!ecWaitIBF()) { ret = kIOReturnTimeout; goto done; }
-        asm volatile("outb %0, %1" :: "a"(newVal), "Nd"(kECDataPort));
-    }
-
-done:
-    IOLockUnlock(ecLock);
-    return ret;
+    return ecWriteLocked(kMSI_EC_COOLER_BOOST_ADDR, newVal);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +576,7 @@ done:
 // turbo   (0xC0): maximum frequencies
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::setShiftMode(MSIShiftModeValue mode) {
+IOReturn MSIECCore::setShiftMode(MSIShiftModeValue mode) {
     uint8_t ecVal;
     switch (mode) {
         case kMSIShiftEco:     ecVal = kMSI_EC_SHIFT_ECO;     break;
@@ -565,75 +585,91 @@ IOReturn MSIECToolbox::setShiftMode(MSIShiftModeValue mode) {
         default: return kIOReturnBadArgument;
     }
     MSIEC_LOG("setShiftMode: mode=%d -> EC[0xF2]=0x%02X", (int)mode, ecVal);
-    return fallbackECWrite(kMSI_EC_SHIFT_MODE_ADDR, ecVal);
+    return ecWrite(kMSI_EC_SHIFT_MODE_ADDR, ecVal);
 }
 
 // ---------------------------------------------------------------------------
 // getSystemState — aggregated single-pass read (temp + fan% + modes)
 //
-// Returns the 7 most useful EC registers in one series of reads.
+// Returns the 7 most useful EC registers in one bus transaction.
 // Used by the LaunchAgent polling loop (selector 9).
 //
-// Individual read failures are tolerated (value stays 0) so that a single
-// timeout does not block the entire state snapshot.
+// Individual read failures are tolerated so that a single timeout does not
+// block the whole snapshot, but they are reported in validMask: a failed
+// read must not be shown as 0 °C / "Auto" / "Boost OFF", or the agent's
+// toggles would act on a state that was never read.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::getSystemState(MSISystemState &out) {
-    uint8_t cpuTemp = 0, gpuTemp = 0;
-    uint8_t cpuPct  = 0, gpuPct  = 0;
-    uint8_t fanModeRaw = 0, shiftRaw = 0, boostRaw = 0;
+IOReturn MSIECCore::getSystemState(MSISystemState &out) {
+    static const struct { uint32_t addr; uint8_t bit; } regs[] = {
+        { kMSI_EC_CPU_TEMP_ADDR,     kMSIStateValidCpuTemp     },
+        { kMSI_EC_GPU_TEMP_ADDR,     kMSIStateValidGpuTemp     },
+        { kMSI_EC_CPU_FAN_PCT_ADDR,  kMSIStateValidCpuFanPct   },
+        { kMSI_EC_GPU_FAN_PCT_ADDR,  kMSIStateValidGpuFanPct   },
+        { kMSI_EC_FAN_MODE_ADDR,     kMSIStateValidFanMode     },
+        { kMSI_EC_SHIFT_MODE_ADDR,   kMSIStateValidShiftMode   },
+        { kMSI_EC_COOLER_BOOST_ADDR, kMSIStateValidCoolerBoost },
+    };
+    uint8_t raw[arrsize(regs)] = {};
+    uint8_t valid = 0;
 
-    fallbackECRead(kMSI_EC_CPU_TEMP_ADDR,    cpuTemp);
-    fallbackECRead(kMSI_EC_GPU_TEMP_ADDR,    gpuTemp);
-    fallbackECRead(kMSI_EC_CPU_FAN_PCT_ADDR, cpuPct);
-    fallbackECRead(kMSI_EC_GPU_FAN_PCT_ADDR, gpuPct);
-    fallbackECRead(kMSI_EC_FAN_MODE_ADDR,    fanModeRaw);
-    fallbackECRead(kMSI_EC_SHIFT_MODE_ADDR,  shiftRaw);
-    fallbackECRead(kMSI_EC_COOLER_BOOST_ADDR,boostRaw);
+    {
+        BusGuard bus;
+        if (bus.status() != kIOReturnSuccess) return bus.status();
+        for (size_t i = 0; i < arrsize(regs); i++) {
+            if (ecReadLocked(static_cast<uint8_t>(regs[i].addr), raw[i]) == kIOReturnSuccess)
+                valid |= regs[i].bit;
+            else
+                raw[i] = 0;
+        }
+    }
 
-    out.cpuTempC    = cpuTemp;
-    out.gpuTempC    = gpuTemp;
-    out.cpuFanPct   = cpuPct;
-    out.gpuFanPct   = gpuPct;
-    out.coolerBoost = (boostRaw & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0;
+    if (valid == 0) return kIOReturnTimeout;
 
-    switch (fanModeRaw) {
+    out.cpuTempC    = raw[0];
+    out.gpuTempC    = raw[1];
+    out.cpuFanPct   = raw[2];
+    out.gpuFanPct   = raw[3];
+    out.coolerBoost = (raw[6] & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0;
+
+    switch (raw[4]) {
         case kMSI_EC_FAN_SILENT:   out.fanMode = kMSIFanModeSilent;   break;
         case kMSI_EC_FAN_ADVANCED: out.fanMode = kMSIFanModeAdvanced; break;
         default:                   out.fanMode = kMSIFanModeAuto;     break;
     }
-    switch (shiftRaw) {
+    switch (raw[5]) {
         case kMSI_EC_SHIFT_ECO:   out.shiftMode = kMSIShiftEco;    break;
         case kMSI_EC_SHIFT_TURBO: out.shiftMode = kMSIShiftTurbo;  break;
         default:                  out.shiftMode = kMSIShiftComfort; break;
     }
-    out.reserved = 0;
+    out.validMask = valid;
 
-    MSIEC_LOG("getSystemState: CPU=%d°C fan=%d%% GPU=%d°C fanMode=%d shift=%d boost=%d",
-               cpuTemp, cpuPct, gpuTemp,
-               (int)out.fanMode, (int)out.shiftMode, (int)out.coolerBoost);
+    MSIEC_LOG("getSystemState: CPU=%d°C fan=%d%% GPU=%d°C fanMode=%d shift=%d boost=%d valid=0x%02X",
+               out.cpuTempC, out.cpuFanPct, out.gpuTempC,
+               (int)out.fanMode, (int)out.shiftMode, (int)out.coolerBoost, valid);
     return kIOReturnSuccess;
 }
 
-IOReturn MSIECToolbox::setCameraState(bool cameraOff) {
+IOReturn MSIECCore::setCameraState(bool cameraOff) {
     uint8_t val = cameraOff ? kMSI_EC_CAM_OFF : kMSI_EC_CAM_ACTIVE;
     MSIEC_LOG("setCameraState: cameraOff=%d -> EC[0x2E]=0x%02X", (int)cameraOff, val);
-    return fallbackECWrite(kMSI_EC_OFFSET_CAMERA, val);
+    return ecWrite(kMSI_EC_OFFSET_CAMERA, val);
 }
 
 // ---------------------------------------------------------------------------
-// readFanRPM — reads the 4 fan RPM registers (0xCA–0xCD)
-// Each register is checked individually: a timeout on any one of them
-// returns an error rather than computing RPM from stale zero values.
+// readFanRPM — reads the 4 fan RPM registers (0xCA–0xCD) in one transaction
+// so the hi/lo bytes of each fan are consistent. Any timeout returns an error
+// rather than computing RPM from stale zero values.
 // ---------------------------------------------------------------------------
 
-IOReturn MSIECToolbox::readFanRPM(uint16_t &outCpuRPM, uint16_t &outGpuRPM) {
-    uint8_t gpuHi = 0, gpuLo = 0, cpuHi = 0, cpuLo = 0;
-    if (fallbackECRead(kMSI_EC_FAN_GPU_HI, gpuHi) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (fallbackECRead(kMSI_EC_FAN_GPU_LO, gpuLo) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (fallbackECRead(kMSI_EC_FAN_CPU_HI, cpuHi) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (fallbackECRead(kMSI_EC_FAN_CPU_LO, cpuLo) != kIOReturnSuccess) return kIOReturnTimeout;
-    outGpuRPM = msiECToRPM(gpuHi, gpuLo);
-    outCpuRPM = msiECToRPM(cpuHi, cpuLo);
+IOReturn MSIECCore::readFanRPM(uint16_t &outCpuRPM, uint16_t &outGpuRPM) {
+    static const uint8_t offsets[4] = {
+        kMSI_EC_FAN_GPU_HI, kMSI_EC_FAN_GPU_LO, kMSI_EC_FAN_CPU_HI, kMSI_EC_FAN_CPU_LO
+    };
+    uint8_t v[4] = {};
+    IOReturn r = readRegisters(offsets, v, 4);
+    if (r != kIOReturnSuccess) return r;
+    outGpuRPM = msiECToRPM(v[0], v[1]);
+    outCpuRPM = msiECToRPM(v[2], v[3]);
     return kIOReturnSuccess;
 }

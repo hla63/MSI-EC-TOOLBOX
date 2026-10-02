@@ -7,71 +7,79 @@
 //   TC0P                        — CPU package temperature (°C)
 //   TG0P                        — integrated GPU temperature (°C)
 //
-// Dependencies: Lilu >= 1.6.0, VirtualSMC >= 1.3.0
+// EC values are sampled every second through MSIECToolboxDriver (shared EC
+// bus lock) and cached; SMC reads only return the cache.
+//
+// Dependencies: Lilu >= 1.6.0, VirtualSMC >= 1.3.0, MSIECToolbox.kext
 // ---------------------------------------------------------------------------
 
 #ifndef SMCMSIFan_h
 #define SMCMSIFan_h
 
-#include <Headers/plugin_start.hpp>
-#include <Headers/kern_api.hpp>
+#include <Headers/kern_util.hpp>
 #include <VirtualSMCSDK/kern_vsmcapi.hpp>
 #include <IOKit/IOService.h>
-#include <IOKit/IOLocks.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <stdatomic.h>
 
 #include "SMCMSIFanKeys.h"
 
-class SMCMSIFan {
+class EXPORT SMCMSIFan : public IOService {
+    OSDeclareDefaultStructors(SMCMSIFan)
+
+    IONotifier         *vsmcNotifier   {nullptr};
+    IOWorkLoop         *workloop       {nullptr};
+    IOTimerEventSource *poller         {nullptr};
+    IOService          *ecService      {nullptr};  // MSIECToolboxDriver, retained
+    const OSSymbol     *readRegsSymbol {nullptr};
+
+    // Must stay unchanged and allocated after submission (VirtualSMC API).
+    VirtualSMCAPI::Plugin vsmcPlugin {
+        xStringify(PRODUCT_NAME),
+        parseModuleVersion(xStringify(MODULE_VERSION)),
+        VirtualSMCAPI::Version,
+    };
+
+    static constexpr uint32_t PollIntervalMS {1000};
+
+    void refreshSensors();
+
 public:
-    static void pluginStart();
+    IOService *probe(IOService *provider, SInt32 *score) override;
+    bool start(IOService *provider) override;
+    void stop(IOService *provider) override;
 
-    // Exposed for the VirtualSMC export symbol ADDPR(vsmcPlugin)
-    static VirtualSMCAPI::Plugin vsmcPlugin;
+    static bool vsmcNotificationHandler(void *sensors, void *refCon,
+                                        IOService *vsmc, IONotifier *notifier);
 
-    // Temperature reads — called by the SMC value classes below
-    static uint8_t readCpuTemp();
-    static uint8_t readGpuTemp();
-
-private:
-    // Raw EC port I/O (same protocol as MSIECToolbox, duplicated intentionally
-    // to keep SMCMSIFan independent — no cross-kext symbols at runtime)
-    static IOReturn ecRead(uint32_t offset, uint8_t &outVal);
-    static bool     ecWaitIBF();
-    static bool     ecWaitOBF();
-
-    // Reads CPU fan RPM from EC 0xCC-0xCD using the ISW formula
-    static uint16_t readCpuRPM();
-
-    friend class SMCFanRPMValue;
-    friend class SMCCpuTempValue;
-    friend class SMCGpuTempValue;
-
-    // Local EC lock — SMCMSIFan is a separate kext with no access to
-    // MSIECToolbox symbols at runtime. ecLock serialises raw port I/O
-    // sequences against concurrent readValue() calls from VirtualSMC.
-    static IOLock *ecLock;
+    // Latest EC samples, read by the SMC value classes below. Static so that
+    // the value objects owned by VirtualSMC never point into a freed instance.
+    static _Atomic(uint16_t) cpuRPM;
+    static _Atomic(uint8_t)  cpuTempC;
+    static _Atomic(uint8_t)  gpuTempC;
 };
 
 // ---------------------------------------------------------------------------
-// SMC value classes — VirtualSMC calls readValue() on each SMC key read
+// SMC value classes — VirtualSMC calls readAccess() before returning a key.
+// They only read the cache: no EC access, no lock, safe in any context.
 // ---------------------------------------------------------------------------
 
 // F0Ac — current CPU fan RPM (fpe2 format)
 class SMCFanRPMValue : public VirtualSMCValue {
-public:
-    SMC_RESULT readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src);
+protected:
+    SMC_RESULT readAccess() override;
 };
 
 // TC0P — CPU package temperature (sp78 format)
 class SMCCpuTempValue : public VirtualSMCValue {
-public:
-    SMC_RESULT readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src);
+protected:
+    SMC_RESULT readAccess() override;
 };
 
 // TG0P — integrated GPU temperature (sp78 format)
 class SMCGpuTempValue : public VirtualSMCValue {
-public:
-    SMC_RESULT readValue(const VirtualSMCKeyValue &kv, VirtualSMCValue *&src);
+protected:
+    SMC_RESULT readAccess() override;
 };
 
 #endif /* SMCMSIFan_h */

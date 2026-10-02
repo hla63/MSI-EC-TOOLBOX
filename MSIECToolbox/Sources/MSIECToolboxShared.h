@@ -241,16 +241,29 @@ struct MSIKbBacklightState {
 } __attribute__((packed));
 
 // Selector 9 — aggregated system state (read-only)
+// A field whose EC read failed is 0 and its bit in validMask is clear:
+// callers must ignore it rather than display 0 °C / "Auto" / "Boost OFF".
+// The selector fails (kIOReturnTimeout) only when every read failed.
 struct MSISystemState {
-    uint8_t cpuTempC;     // °C, 0 on EC error
-    uint8_t gpuTempC;     // °C, 0 on EC error (iGPU only on A10M)
+    uint8_t cpuTempC;     // °C
+    uint8_t gpuTempC;     // °C (iGPU only on A10M)
     uint8_t cpuFanPct;    // %, range 0-150
     uint8_t gpuFanPct;    // %, always 0 on A10M (no dedicated GPU fan)
     uint8_t fanMode;      // MSIFanModeValue
     uint8_t shiftMode;    // MSIShiftModeValue
     uint8_t coolerBoost;  // 0 or 1
-    uint8_t reserved;
+    uint8_t validMask;    // kMSIStateValid* bits
 } __attribute__((packed));
+
+enum : uint8_t {
+    kMSIStateValidCpuTemp     = 1 << 0,
+    kMSIStateValidGpuTemp     = 1 << 1,
+    kMSIStateValidCpuFanPct   = 1 << 2,
+    kMSIStateValidGpuFanPct   = 1 << 3,
+    kMSIStateValidFanMode     = 1 << 4,
+    kMSIStateValidShiftMode   = 1 << 5,
+    kMSIStateValidCoolerBoost = 1 << 6,
+};
 
 struct MSIBatteryChargeState {
     uint8_t percent;    // 80 or 100
@@ -264,10 +277,31 @@ struct MSIBatteryChargeState {
 //   - temp[i] in [20, 95] °C
 //   - speed[i] <= speed[i+1] (non-decreasing)
 //   - speed[i] in [0, 100] %  (0 = fan off, valid for point 0)
+// Thermal safety floor, enforced by the kext whoever the caller is:
+//   - any breakpoint at or above kMSIFanCurveFloorTempC must request at
+//     least kMSIFanCurveFloorSpeedPct
+//   - the last breakpoint must request at least kMSIFanCurveFloorSpeedPct
+// so that no curve can keep the fan stopped up to the CPU's throttle point.
+// The LaunchAgent mirrors these values (FanCurvePanel) — keep them in sync.
 struct MSIFanCurve {
     uint8_t temps[6];   // °C, indices 0-5
     uint8_t speeds[6];  // %, indices 0-5
 } __attribute__((packed));
+
+static constexpr uint8_t kMSIFanCurveFloorTempC    = 70;
+static constexpr uint8_t kMSIFanCurveFloorSpeedPct = 50;
+
+// ---------------------------------------------------------------------------
+// Kernel-to-kernel interface: SMCMSIFan reads the EC through
+// MSIECToolboxDriver::callPlatformFunction() so that both kexts share one
+// bus lock. No symbol is linked across kexts.
+//   param1: const uint8_t *offsets
+//   param2: uint8_t       *values  (same length as offsets)
+//   param3: (void *)(uintptr_t) count, 1..kMSIECMaxBatchRead
+//   param4: unused
+// ---------------------------------------------------------------------------
+#define kMSIECReadRegistersFunction "MSIECReadRegisters"
+static constexpr uint32_t kMSIECMaxBatchRead = 16;
 
 // ---------------------------------------------------------------------------
 // ISW RPM formula

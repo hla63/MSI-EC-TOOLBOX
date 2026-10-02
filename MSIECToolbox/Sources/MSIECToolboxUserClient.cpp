@@ -116,8 +116,15 @@ bool MSIECToolboxUserClient::initWithTask(
     if (!IOUserClient::initWithTask(owningTask, securityToken, type, props))
         return false;
 
-    // No privilege check — LED control is accessible to any local user
-    // (personal Hackintosh use case).
+    // These selectors drive fans, camera and charging: only the user logged
+    // in at the console (the LaunchAgent) or root (CLI under sudo) may open
+    // the connection. Other accounts, ssh sessions and daemons are refused.
+    if (clientHasPrivilege(owningTask, kIOClientPrivilegeLocalUser)     != kIOReturnSuccess &&
+        clientHasPrivilege(owningTask, kIOClientPrivilegeAdministrator) != kIOReturnSuccess) {
+        MSIEC_ERR("UserClient refused: client is neither the console user nor root");
+        return false;
+    }
+
     MSIEC_LOG("UserClient::initWithTask OK");
     return true;
 }
@@ -165,7 +172,7 @@ IOReturn MSIECToolboxUserClient::sActionSetMuteState(
         return kIOReturnBadArgument;
 
     const auto *state = static_cast<const MSIMuteState *>(args->structureInput);
-    return MSIECToolbox::setMuteState(state->speakerMuted != 0,
+    return MSIECCore::setMuteState(state->speakerMuted != 0,
                                     state->micMuted     != 0);
 }
 
@@ -177,7 +184,7 @@ IOReturn MSIECToolboxUserClient::sActionGetMuteState(
 
     auto *state = static_cast<MSIMuteState *>(args->structureOutput);
     bool spk, mic;
-    IOReturn ret = MSIECToolbox::getMuteState(spk, mic);
+    IOReturn ret = MSIECCore::getMuteState(spk, mic);
     if (ret == kIOReturnSuccess) {
         state->speakerMuted = spk ? 1 : 0;
         state->micMuted     = mic ? 1 : 0;
@@ -194,7 +201,7 @@ IOReturn MSIECToolboxUserClient::sActionDumpEC(
         return kIOReturnBadArgument;
 
     auto *dump = static_cast<MSIECDump *>(args->structureOutput);
-    return MSIECToolbox::dumpEC(dump->data);
+    return MSIECCore::dumpEC(dump->data);
 }
 
 IOReturn MSIECToolboxUserClient::sActionSetCameraState(
@@ -204,7 +211,7 @@ IOReturn MSIECToolboxUserClient::sActionSetCameraState(
         return kIOReturnBadArgument;
 
     const auto *state = static_cast<const MSICameraState *>(args->structureInput);
-    return MSIECToolbox::setCameraState(state->cameraOff != 0);
+    return MSIECCore::setCameraState(state->cameraOff != 0);
 }
 
 IOReturn MSIECToolboxUserClient::sActionGetAllState(
@@ -214,20 +221,19 @@ IOReturn MSIECToolboxUserClient::sActionGetAllState(
         return kIOReturnBadArgument;
 
     auto *out = static_cast<MSIAllState *>(args->structureOutput);
-    uint8_t micVal = 0, spkVal = 0, camVal = 0;
 
-    // Check each return value — an EC timeout must return an error rather
-    // than zeros that would be misinterpreted as "active" state.
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_OFFSET_MIC,     micVal) != kIOReturnSuccess)
-        return kIOReturnTimeout;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_OFFSET_SPEAKER, spkVal) != kIOReturnSuccess)
-        return kIOReturnTimeout;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_OFFSET_CAMERA,  camVal) != kIOReturnSuccess)
-        return kIOReturnTimeout;
+    // An EC timeout must return an error rather than zeros that would be
+    // misinterpreted as "active" state.
+    static const uint8_t offsets[3] = {
+        kMSI_EC_OFFSET_MIC, kMSI_EC_OFFSET_SPEAKER, kMSI_EC_OFFSET_CAMERA
+    };
+    uint8_t v[3] = {};
+    IOReturn r = MSIECCore::readRegisters(offsets, v, 3);
+    if (r != kIOReturnSuccess) return r;
 
-    out->micMuted     = (micVal & kMSI_EC_BIT_LED) ? 1 : 0;
-    out->speakerMuted = (spkVal & kMSI_EC_BIT_LED) ? 1 : 0;
-    out->cameraOff    = (camVal == kMSI_EC_CAM_OFF)  ? 1 : 0;
+    out->micMuted     = (v[0] & kMSI_EC_BIT_LED) ? 1 : 0;
+    out->speakerMuted = (v[1] & kMSI_EC_BIT_LED) ? 1 : 0;
+    out->cameraOff    = (v[2] == kMSI_EC_CAM_OFF)  ? 1 : 0;
     out->reserved     = 0;
     return kIOReturnSuccess;
 }
@@ -240,19 +246,13 @@ IOReturn MSIECToolboxUserClient::sActionReadFanRPM(
 
     auto *out = static_cast<MSIFanState *>(args->structureOutput);
 
-    // Check each return value — zeros from a timeout would be interpreted as
-    // valid RPM values by the msiECToRPM formula.
-    uint8_t gpuHi = 0, gpuLo = 0, cpuHi = 0, cpuLo = 0;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_FAN_GPU_HI, gpuHi) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_FAN_GPU_LO, gpuLo) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_FAN_CPU_HI, cpuHi) != kIOReturnSuccess) return kIOReturnTimeout;
-    if (MSIECToolbox::fallbackECRead(kMSI_EC_FAN_CPU_LO, cpuLo) != kIOReturnSuccess) return kIOReturnTimeout;
+    uint16_t cpu = 0, gpu = 0;
+    IOReturn r = MSIECCore::readFanRPM(cpu, gpu);
+    if (r != kIOReturnSuccess) return r;
 
-    out->gpuRPM = msiECToRPM(gpuHi, gpuLo);
-    out->cpuRPM = msiECToRPM(cpuHi, cpuLo);
-
-    MSIEC_LOG("readFanRPM: GPU=%u CPU=%u (raw GPU=0x%02X%02X CPU=0x%02X%02X)",
-               out->gpuRPM, out->cpuRPM, gpuHi, gpuLo, cpuHi, cpuLo);
+    out->gpuRPM = gpu;
+    out->cpuRPM = cpu;
+    MSIEC_LOG("readFanRPM: GPU=%u CPU=%u", gpu, cpu);
     return kIOReturnSuccess;
 }
 
@@ -266,7 +266,7 @@ IOReturn MSIECToolboxUserClient::sActionSetFanMode(
     if (!args->structureInput || args->structureInputSize < sizeof(MSIFanModeState))
         return kIOReturnBadArgument;
     const auto *s = static_cast<const MSIFanModeState *>(args->structureInput);
-    return MSIECToolbox::setFanMode(static_cast<MSIFanModeValue>(s->mode));
+    return MSIECCore::setFanMode(static_cast<MSIFanModeValue>(s->mode));
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ IOReturn MSIECToolboxUserClient::sActionSetCoolerBoost(
     if (!args->structureInput || args->structureInputSize < sizeof(MSICoolerBoostState))
         return kIOReturnBadArgument;
     const auto *s = static_cast<const MSICoolerBoostState *>(args->structureInput);
-    return MSIECToolbox::setCoolerBoost(s->enabled != 0);
+    return MSIECCore::setCoolerBoost(s->enabled != 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ IOReturn MSIECToolboxUserClient::sActionSetShiftMode(
     if (!args->structureInput || args->structureInputSize < sizeof(MSIShiftModeState))
         return kIOReturnBadArgument;
     const auto *s = static_cast<const MSIShiftModeState *>(args->structureInput);
-    return MSIECToolbox::setShiftMode(static_cast<MSIShiftModeValue>(s->mode));
+    return MSIECCore::setShiftMode(static_cast<MSIShiftModeValue>(s->mode));
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ IOReturn MSIECToolboxUserClient::sActionGetSystemState(
     if (!args->structureOutput || args->structureOutputSize < sizeof(MSISystemState))
         return kIOReturnBadArgument;
     auto *out = static_cast<MSISystemState *>(args->structureOutput);
-    return MSIECToolbox::getSystemState(*out);
+    return MSIECCore::getSystemState(*out);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +318,7 @@ IOReturn MSIECToolboxUserClient::sActionSetBatteryCharge(
     if (!args->structureInput || args->structureInputSize < sizeof(MSIBatteryChargeState))
         return kIOReturnBadArgument;
     const auto *s = static_cast<const MSIBatteryChargeState *>(args->structureInput);
-    return MSIECToolbox::setBatteryCharge(s->percent);
+    return MSIECCore::setBatteryCharge(s->percent);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +332,7 @@ IOReturn MSIECToolboxUserClient::sActionGetBatteryCharge(
         return kIOReturnBadArgument;
     auto *out = static_cast<MSIBatteryChargeState *>(args->structureOutput);
     out->reserved[0] = out->reserved[1] = out->reserved[2] = 0;
-    return MSIECToolbox::getBatteryCharge(out->percent);
+    return MSIECCore::getBatteryCharge(out->percent);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ IOReturn MSIECToolboxUserClient::sActionSetFanCurve(
     if (!args->structureInput || args->structureInputSize < sizeof(MSIFanCurve))
         return kIOReturnBadArgument;
     const auto *c = static_cast<const MSIFanCurve *>(args->structureInput);
-    return MSIECToolbox::setFanCurve(*c);
+    return MSIECCore::setFanCurve(*c);
 }
 
 // ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ IOReturn MSIECToolboxUserClient::sActionGetFanCurve(
     if (!args->structureOutput || args->structureOutputSize < sizeof(MSIFanCurve))
         return kIOReturnBadArgument;
     auto *out = static_cast<MSIFanCurve *>(args->structureOutput);
-    return MSIECToolbox::getFanCurve(*out);
+    return MSIECCore::getFanCurve(*out);
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ IOReturn MSIECToolboxUserClient::sActionSetKbBacklight(
     if (!args->structureInput || args->structureInputSize < sizeof(MSIKbBacklightState))
         return kIOReturnBadArgument;
     const auto *s = static_cast<const MSIKbBacklightState *>(args->structureInput);
-    return MSIECToolbox::setKbBacklight(s->level);
+    return MSIECCore::setKbBacklight(s->level);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,5 +385,5 @@ IOReturn MSIECToolboxUserClient::sActionGetKbBacklight(
         return kIOReturnBadArgument;
     auto *out = static_cast<MSIKbBacklightState *>(args->structureOutput);
     out->reserved[0] = out->reserved[1] = out->reserved[2] = 0;
-    return MSIECToolbox::getKbBacklight(out->level);
+    return MSIECCore::getKbBacklight(out->level);
 }
