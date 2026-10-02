@@ -42,7 +42,6 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     private var currentInputID:  AudioDeviceID = AudioDeviceID(kAudioObjectUnknown)
 
     private var pollTimer:   DispatchSourceTimer?
-    private var fanTimer:    DispatchSourceTimer?
     private var eventTap:    CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var lastCamState = false  // mis à jour par pollEC() via EC 0x2E
@@ -108,7 +107,6 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         // Supprimer le fichier PID : un PID recyclé ne doit pas être pris pour l'agent.
         try? FileManager.default.removeItem(atPath: pidFile)
         pollTimer?.cancel()
-        fanTimer?.cancel()
         accessibilityRetryTimer?.cancel()
         tapWatchdogTimer?.cancel()
         if let obs = screenObserver { NotificationCenter.default.removeObserver(obs) }
@@ -469,10 +467,21 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     }
 
     private func toggleKbBacklight() {
-        let current = menuBar.currentKbBacklightLevel
-        let next = (current + 1) % 4  // cycle 0→1→2→3→0
-        setKbBacklight(next)
-        NSLog("[MSIECToolboxAgent] toggleKbBacklight: %d → %d", current, next)
+        // Read the current level from the EC in the same queue operation as
+        // the write: it is not polled while the menu is closed, and the
+        // firmware may have changed it.
+        let cached = menuBar.currentKbBacklightLevel
+        client.run({ c -> UInt8? in
+            let next = ((c.getKbBacklight() ?? cached) + 1) % 4  // cycle 0→1→2→3→0
+            return c.setKbBacklight(level: next) ? next : nil
+        }) { [weak self] next in
+            guard let next = next else {
+                NSLog("[MSIECToolboxAgent] toggleKbBacklight — kext non connecté")
+                return
+            }
+            NSLog("[MSIECToolboxAgent] toggleKbBacklight → %d", next)
+            self?.menuBar.updateKbBacklightItems(level: next)
+        }
     }
 
     private func showPreferences() {
@@ -538,44 +547,72 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         }
     }
 
-    // ── Polling EC (500ms) — couvre mute, caméra, fan%, temp, modes ─────────
-    // Le fanPolling séparé (2s) est conservé uniquement pour les RPM bruts.
-    // Both timers fire on the EC queue (blocking reads), then hand the
-    // results to the main queue, where all agent state lives.
+    // ── Polling EC — adaptive ────────────────────────────────────────────────
+    //
+    // Menu closed: only the mute LEDs and the camera (getAllState, 3 EC reads)
+    // once per second — all the status icon shows, and what the EC -> CoreAudio
+    // mute sync needs. Menu open: an immediate refresh, then everything the
+    // menu shows every 500 ms (backlight, temperatures, modes) and the fan RPM
+    // every 2 s. About 3 EC reads/s instead of 24 most of the time.
+    //
+    // The timer fires on the EC queue (blocking reads) and hands a snapshot
+    // to the main queue, where all agent state lives. pollFull and
+    // rpmCountdown are only touched on client.queue.
+
+    private enum PollInterval {
+        static let menuClosed: DispatchTimeInterval = .seconds(1)
+        static let menuOpen:   DispatchTimeInterval = .milliseconds(500)
+        static let rpmEvery    = 4  // menu-open ticks between RPM reads (2 s)
+    }
 
     private struct PollSnapshot {
         let mute:      (micMuted: Bool, speakerMuted: Bool, cameraOff: Bool)?
         let backlight: UInt8?
         let system:    MSISystemState?
+        let rpm:       (cpuRPM: Int, gpuRPM: Int)?
     }
 
+    private var pollFull     = false  // client.queue only
+    private var rpmCountdown = 0      // client.queue only
+
     private func startECPolling() {
-        // 500ms poll: system state (temps, fan %, modes) + LED sync
         let timer = DispatchSource.makeTimerSource(queue: client.queue)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(100))
+        timer.schedule(deadline: .now() + PollInterval.menuClosed,
+                       repeating: PollInterval.menuClosed, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
+            let full = self.pollFull
+            var rpm: (cpuRPM: Int, gpuRPM: Int)? = nil
+            if full {
+                if self.rpmCountdown <= 0 {
+                    rpm = self.client.readFanRPM()
+                    self.rpmCountdown = PollInterval.rpmEvery
+                }
+                self.rpmCountdown -= 1
+            }
             let snap = PollSnapshot(mute:      self.client.readECMuteState(),
-                                    backlight: self.client.getKbBacklight(),
-                                    system:    self.client.readSystemState())
+                                    backlight: full ? self.client.getKbBacklight()  : nil,
+                                    system:    full ? self.client.readSystemState() : nil,
+                                    rpm:       rpm)
             DispatchQueue.main.async { self.applyPoll(snap) }
         }
         timer.resume()
         pollTimer = timer
 
-        // Dedicated 2s timer for RPM (4 EC reads via ISW formula).
-        // Separated from the 500ms poll to reduce EC bus load:
-        // RPM precision at 500ms is unnecessary for the menu bar display.
-        let rpmTimer = DispatchSource.makeTimerSource(queue: client.queue)
-        rpmTimer.schedule(deadline: .now() + 2.0, repeating: 2.0, leeway: .milliseconds(500))
-        rpmTimer.setEventHandler { [weak self] in
-            guard let self = self, let rpm = self.client.readFanRPM() else { return }
-            DispatchQueue.main.async {
-                self.menuBar.updateFanItems(cpuRPM: rpm.cpuRPM, gpuRPM: rpm.gpuRPM)
-            }
+        menuBar.menuTracker.onOpen  = { [weak self] in self?.setPollMode(menuOpen: true) }
+        menuBar.menuTracker.onClose = { [weak self] in self?.setPollMode(menuOpen: false) }
+    }
+
+    private func setPollMode(menuOpen: Bool) {
+        // Queued before the reschedule below: the next tick (immediate when
+        // the menu opens) already sees the new mode.
+        client.queue.async { [weak self] in
+            self?.pollFull     = menuOpen
+            self?.rpmCountdown = 0
         }
-        rpmTimer.resume()
-        fanTimer = rpmTimer
+        let interval = menuOpen ? PollInterval.menuOpen : PollInterval.menuClosed
+        pollTimer?.schedule(deadline: menuOpen ? .now() : .now() + interval,
+                            repeating: interval, leeway: .milliseconds(menuOpen ? 100 : 200))
     }
 
     private func applyPoll(_ snap: PollSnapshot) {
@@ -617,7 +654,9 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         if let sys = snap.system {
             menuBar.updateSystemState(state: sys)
         }
-        // RPM updated by dedicated 2s timer (startECPolling)
+        if let rpm = snap.rpm {
+            menuBar.updateFanItems(cpuRPM: rpm.cpuRPM, gpuRPM: rpm.gpuRPM)
+        }
     }
 
     // ── CoreAudio → EC ───────────────────────────────────────────────────────

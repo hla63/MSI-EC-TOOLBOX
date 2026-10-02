@@ -8,7 +8,18 @@ import AppKit
 // MARK: – Barre de menu
 // ---------------------------------------------------------------------------
 
+/// Reports when the status menu opens and closes. NSMenuDelegate requires
+/// an NSObject, which MenuBarController is not; NSMenu.delegate is weak, so
+/// MenuBarController keeps the strong reference.
+final class MenuOpenTracker: NSObject, NSMenuDelegate {
+    var onOpen:  (() -> Void)?
+    var onClose: (() -> Void)?
+    func menuWillOpen(_ menu: NSMenu) { onOpen?() }
+    func menuDidClose(_ menu: NSMenu) { onClose?() }
+}
+
 final class MenuBarController {
+    let menuTracker = MenuOpenTracker()
     var statusItem:  NSStatusItem!
     private var micItem:     NSMenuItem!
     private var speakerItem: NSMenuItem!
@@ -250,6 +261,7 @@ final class MenuBarController {
         quit.keyEquivalent = "q"
         menu.addItem(quit)
 
+        menu.delegate = menuTracker
         statusItem.menu = menu
     }
 

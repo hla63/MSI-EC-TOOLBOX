@@ -117,13 +117,16 @@ Login
     IOKit open MSIECToolboxDriver → UserClient (16 selectors)
     CoreAudio listener → system mute changes → selector setMuteState → EC 0x2B/0x2C (LED bit 0x04)
     CGEventTap (requires Accessibility) → keycodes 79/111/80/90/100 → direct actions
-    500ms poll → selectors 4 (getAllState), 11 (getKbBacklight), 9 (getSystemState)
-    2s timer   → selector 5 (readFanRPM)
+    EC poll, menu closed → selector 4 (getAllState) every 1 s (icon + mute sync)
+    EC poll, menu open   → immediate, then 4 + 11 (getKbBacklight) + 9 (getSystemState)
+                           every 500 ms, and 5 (readFanRPM) every 2 s
 ```
 
 **Agent source layout** (`LaunchAgent/Sources/`, one module, `main.swift` is the only file allowed top-level code): `ECTypes` (mirror of the kext ABI), `ECClient` (IOKit client + its serial queue), `MenuBarController` (status item, menu, preference state), `MuteObserver` (app delegate: key tap and Fn keycodes, CoreAudio sync, EC polling, rotation, menu actions), `MuteOSD`, `PreferencesPanel`, `ECDumpPanel`, `FanCurvePanel`, `FanProfiles`. File-scope `private` declarations (keycodes, `WatchBox`, `OSDView`) are only visible in their file — keep them next to their only user. `MSIECToolboxInstaller.swift` is a separate executable, not part of the agent.
 
 **Agent threading**: every IOKit call goes through `MSIECToolboxClient.queue` (serial, `.utility`), usually via `client.run({ work on queue }) { result on main }`. Never call a client method from the main thread: the CGEventTap runs on the main run loop and every keystroke of the system waits for it, while a kext call can block for tens of ms on the EC. The poll/RPM timers fire on that queue and hand a snapshot to `applyPoll` on main, where all agent state (`lastSent*`, `lastCamState`, menu items) lives. Because the queue is serial, a poll queued after a write reads the written state and its result reaches main after the write's completion.
+
+**Adaptive EC polling**: one `DispatchSourceTimer` on the EC queue. `MenuOpenTracker` (the status menu's `NSMenuDelegate`) switches it between closed (1 s, mute/camera only — ~3 EC reads/s) and open (500 ms, full state, RPM every 4th tick). Anything not polled while the menu is closed must be read on demand before it is used: e.g. F8 reads the backlight level from the EC in the same queue operation as the write, because the firmware can change it.
 
 **CGEventTap health**: macOS disables the tap when the main run loop is too slow (e.g. during a display reconfiguration — rotating to 90°/270°) or on Secure Input, and only reports it with the next event, which is then lost. `MuteObserver` re-enables it on `NSApplication.didChangeScreenParametersNotification` and from a 2 s watchdog, which also shows the menu warning (`setAccessibilityWarning`) when `AXIsProcessTrusted()` is false — the case after a re-signature, where the Accessibility entry looks checked but must be removed and re-added.
 
