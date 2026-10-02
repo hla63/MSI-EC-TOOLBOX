@@ -167,14 +167,14 @@ final class PreferencesPanel: NSObject {
         cbBacklight.state = c.prefShowBacklight   ? .on : .off
         cbLEDMic.state    = c.prefLEDWatchMic     ? .on : .off
         cbLEDSpk.state    = c.prefLEDWatchSpk     ? .on : .off
-        rbCamRouge.state  = (c.prefLEDCamColor == "rouge")  ? .on : .off
-        rbCamOrange.state = (c.prefLEDCamColor == "orange") ? .on : .off
-        rbCamJaune.state  = (c.prefLEDCamColor == "jaune")  ? .on : .off
-        rbCamNone.state   = (c.prefLEDCamColor == "none")   ? .on : .off
-        rbLED.state       = (c.prefIconStyle == "led") ? .on : .off
-        rbEC.state        = (c.prefIconStyle == "ec")  ? .on : .off
-        rbRot180.state    = (c.prefRotationMode == "180")     ? .on : .off
-        rbRotCycle.state  = (c.prefRotationMode == "90cycle") ? .on : .off
+        rbCamRouge.state  = (c.prefLEDCamColor == .red)     ? .on : .off
+        rbCamOrange.state = (c.prefLEDCamColor == .orange)  ? .on : .off
+        rbCamJaune.state  = (c.prefLEDCamColor == .yellow)  ? .on : .off
+        rbCamNone.state   = (c.prefLEDCamColor == .ignored) ? .on : .off
+        rbLED.state       = (c.prefIconStyle == .led) ? .on : .off
+        rbEC.state        = (c.prefIconStyle == .ec)  ? .on : .off
+        rbRot180.state    = (c.prefRotationMode == .flip180) ? .on : .off
+        rbRotCycle.state  = (c.prefRotationMode == .cycle90) ? .on : .off
         cbOSD.state       = c.prefShowOSD ? .on : .off
     }
 
@@ -186,25 +186,13 @@ final class PreferencesPanel: NSObject {
     @objc private func tapCbBacklight() { controller?.tapPrefBacklight() }
     @objc private func tapCbLEDMic()    { controller?.tapPrefLEDMic();     reload() }
     @objc private func tapCbLEDSpk()    { controller?.tapPrefLEDSpk();     reload() }
-    @objc private func tapRbCamRouge()  { controller?.tapPrefLEDCamRouge();  reload() }
-    @objc private func tapRbCamOrange() { controller?.tapPrefLEDCamOrange(); reload() }
-    @objc private func tapRbCamJaune()  { controller?.tapPrefLEDCamJaune();  reload() }
-    @objc private func tapRbCamNone()   { controller?.tapPrefLEDCamNone();   reload() }
+    @objc private func tapRbCamRouge()  { controller?.setCameraLEDColor(.red);     reload() }
+    @objc private func tapRbCamOrange() { controller?.setCameraLEDColor(.orange);  reload() }
+    @objc private func tapRbCamJaune()  { controller?.setCameraLEDColor(.yellow);  reload() }
+    @objc private func tapRbCamNone()   { controller?.setCameraLEDColor(.ignored); reload() }
     @objc private func tapRbLED()       { controller?.tapPrefIconLED();     reload() }
     @objc private func tapRbEC()        { controller?.tapPrefIconEC();      reload() }
-    @objc private func tapCbOSD() {
-        controller?.prefShowOSD.toggle()
-        UserDefaults.standard.set(controller?.prefShowOSD ?? true, forKey: "pref_show_osd")
-        reload()
-    }
-    @objc private func tapRb180()       {
-        controller?.prefRotationMode = "180"
-        UserDefaults.standard.set("180", forKey: "pref_rotation_mode")
-        reload()
-    }
-    @objc private func tapRbCycle()     {
-        controller?.prefRotationMode = "90cycle"
-        UserDefaults.standard.set("90cycle", forKey: "pref_rotation_mode")
-        reload()
-    }
+    @objc private func tapCbOSD()   { controller?.toggleShowOSD();             reload() }
+    @objc private func tapRb180()   { controller?.setRotationMode(.flip180);   reload() }
+    @objc private func tapRbCycle() { controller?.setRotationMode(.cycle90);   reload() }
 }

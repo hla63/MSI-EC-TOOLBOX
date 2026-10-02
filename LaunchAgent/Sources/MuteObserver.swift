@@ -352,7 +352,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             NSLog("[MSIECToolboxAgent] Rotation : écran interne introuvable")
             return
         }
-        let target = menuBar.prefRotationMode == "90cycle"
+        let target = menuBar.prefRotationMode == .cycle90
             ? (current + 90) % 360
             : (current == 0 ? 180 : 0)
         // displayplacer matches res: after rotating, i.e. in the target orientation.
