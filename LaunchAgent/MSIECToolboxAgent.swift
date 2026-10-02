@@ -1245,9 +1245,9 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     private var lastSentSpeaker = false
     private var lastSentMic     = false
 
-    private var displayRotated   = false
-    private var currentRotDegree = 0   // 0, 90, 180, 270 pour mode cycle
-    private let kDisplayID       = "CC868235-2DF0-05C3-7FEE-80DFD78D701F"
+    private var rotationInProgress = false
+    private var displayObserver:   NSObjectProtocol?
+    private let kDisplayID         = "CC868235-2DF0-05C3-7FEE-80DFD78D701F"
 
     private var currentOutputID: AudioDeviceID = AudioDeviceID(kAudioObjectUnknown)
     private var currentInputID:  AudioDeviceID = AudioDeviceID(kAudioObjectUnknown)
@@ -1295,6 +1295,12 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                 }
                 NSLog("[MSIECToolboxAgent] ⚠️ kext déconnecté — LEDs et fan désactivés")
             })
+        // Rotation shown from the real display state, also when it changes
+        // outside the agent (System Settings, another tool, agent restart).
+        syncRotationItem()
+        displayObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in self?.syncRotationItem() }
         installDeviceChangeListeners()
         installMuteListeners(force: true)
         startECPolling()
@@ -1312,6 +1318,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         accessibilityRetryTimer?.cancel()
         tapWatchdogTimer?.cancel()
         if let obs = screenObserver { NotificationCenter.default.removeObserver(obs) }
+        if let obs = displayObserver { NotificationCenter.default.removeObserver(obs) }
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = eventTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes); eventTapSource = nil }
         client.stopWatching()
@@ -1494,40 +1501,73 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         setAudioMute(deviceID: deviceID, input: false, muted: !current)
     }
 
+    // ── Rotation écran ───────────────────────────────────────────────────────
+    //
+    // The real rotation (CGDisplayRotation) is the only source of truth: the
+    // next angle is computed from it and the menu always shows it. The
+    // displayplacer exit code is not used — it rotates first, then looks up
+    // `res:` in the new orientation, so a resolution miss returns 1 even
+    // though the screen did turn.
+
+    /// Internal panel (kDisplayID is its UUID, used for displayplacer), else the main display.
+    private func rotationDisplayID() -> CGDirectDisplayID? {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return nil }
+        return ids.prefix(Int(count)).first { CGDisplayIsBuiltin($0) != 0 } ?? CGMainDisplayID()
+    }
+
+    /// Current rotation of the internal panel, normalised to 0/90/180/270.
+    private func actualRotation() -> Int? {
+        guard let id = rotationDisplayID() else { return nil }
+        let deg = (Int(CGDisplayRotation(id).rounded()) % 360 + 360) % 360
+        return (deg / 90) * 90
+    }
+
+    private func syncRotationItem() {
+        if let deg = actualRotation() { menuBar.updateRotItem(degree: deg) }
+    }
+
     private func toggleDisplayRotation() {
-        let previousDegree  = currentRotDegree
-        let previousRotated = displayRotated
-        let newDegree: Int
-        if menuBar.prefRotationMode == "90cycle" {
-            currentRotDegree = (currentRotDegree + 90) % 360
-            newDegree = currentRotDegree
-            displayRotated = (newDegree != 0)
-        } else {
-            newDegree = displayRotated ? 0 : 180
-            displayRotated = !displayRotated
-            currentRotDegree = newDegree
+        // One rotation at a time: a held F12 (auto-repeat) or impatient
+        // presses must not start several displayplacer runs on top of a
+        // display reconfiguration.
+        guard !rotationInProgress else {
+            NSLog("[MSIECToolboxAgent] Rotation déjà en cours — appui ignoré")
+            return
         }
-        menuBar.updateRotItem(degree: newDegree)
-
-        // Undo the optimistic state above when displayplacer did not rotate,
-        // unless another rotation has been requested in the meantime.
-        let revert: (String) -> Void = { [weak self] reason in
-            DispatchQueue.main.async {
-                guard let self = self, self.currentRotDegree == newDegree else { return }
-                NSLog("[MSIECToolboxAgent] Rotation annulée : %@", reason)
-                self.currentRotDegree = previousDegree
-                self.displayRotated   = previousRotated
-                self.menuBar.updateRotItem(degree: previousDegree)
-            }
+        guard let current = actualRotation() else {
+            NSLog("[MSIECToolboxAgent] Rotation : écran interne introuvable")
+            return
         }
+        let target = menuBar.prefRotationMode == "90cycle"
+            ? (current + 90) % 360
+            : (current == 0 ? 180 : 0)
+        // displayplacer matches res: after rotating, i.e. in the target orientation.
+        let res = (target == 90 || target == 270) ? "1080x1920" : "1920x1080"
+        let spec = "id:\(kDisplayID) res:\(res) color_depth:4 enabled:true scaling:off origin:(0,0) degree:\(target)"
+        NSLog("[MSIECToolboxAgent] Rotation écran %d° → %d°", current, target)
 
-        NSLog("[MSIECToolboxAgent] Rotation écran → %d°", newDegree)
-        let spec = "id:\(kDisplayID) res:1920x1080 color_depth:4 enabled:true scaling:off origin:(0,0) degree:\(newDegree)"
+        rotationInProgress = true
         // Exécution sur thread background pour ne pas geler la barre de menu
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let finish: (String?) -> Void = { problem in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.rotationInProgress = false
+                    if let problem = problem { NSLog("[MSIECToolboxAgent] Rotation : %@", problem) }
+                    let actual = self.actualRotation()
+                    if let actual = actual, actual != target {
+                        NSLog("[MSIECToolboxAgent] Rotation demandée %d°, écran à %d°", target, actual)
+                    }
+                    self.syncRotationItem()
+                }
+            }
+
             let path = "/usr/local/bin/displayplacer"
             guard FileManager.default.isExecutableFile(atPath: path) else {
-                revert("\(path) introuvable (brew install displayplacer)")
+                finish("\(path) introuvable (brew install displayplacer)")
                 return
             }
             let task = Process()
@@ -1541,7 +1581,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             } catch {
                 // terminationStatus on a process that never ran raises an
                 // Objective-C exception and kills the agent.
-                revert("lancement impossible : \(error.localizedDescription)")
+                finish("lancement impossible : \(error.localizedDescription)")
                 return
             }
             // Drain the pipe before waiting so a large output cannot block the child.
@@ -1550,10 +1590,8 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             let out = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !out.isEmpty { NSLog("[MSIECToolboxAgent] displayplacer: %@", out) }
-            NSLog("[MSIECToolboxAgent] Rotation terminée (exit=%d)", task.terminationStatus)
-            if task.terminationStatus != 0 {
-                revert("displayplacer exit=\(task.terminationStatus)")
-            }
+            NSLog("[MSIECToolboxAgent] displayplacer terminé (exit=%d)", task.terminationStatus)
+            finish(nil)
         }
     }
 
