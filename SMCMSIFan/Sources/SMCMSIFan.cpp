@@ -5,13 +5,15 @@
 // MSI Modern 15 A10M as standard SMC keys.
 //
 // Published keys:
-//   F0Ac / F0Mn / F0Mx / FNum  — CPU fan RPM (ISW formula)
+//   BCLM                        — battery charge limit (EC 0xEF), read/write
+//   F0xx / F1xx / FNum          — CPU and GPU fan RPM (ISW formula), mode, id
 //   TG0P                        — integrated GPU temperature (EC 0x80, sp78)
 //
 // Flow:
 //   start()                  adds the keys, waits for VirtualSMC
 //   vsmcNotificationHandler  submits the plugin, starts a 1s poller
-//   refreshSensors()         reads the EC through MSIECToolboxDriver
+//   refreshSensors()         applies a pending BCLM write, then reads the
+//                            EC through MSIECToolboxDriver
 //                            (kMSIECReadRegistersFunction) into a cache
 //   readAccess()             returns the cache
 // ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ uint32_t ADDPR(debugPrintDelay) = 0;
 _Atomic(uint16_t) SMCMSIFan::fanRPM[2] = {};
 _Atomic(uint8_t)  SMCMSIFan::gpuTempC = 0;
 _Atomic(uint8_t)  SMCMSIFan::fanForced = 0;
+_Atomic(uint8_t)  SMCMSIFan::batteryLimit = 100;
+_Atomic(uint8_t)  SMCMSIFan::pendingBatteryLimit = 0;
 
 // ---------------------------------------------------------------------------
 // IOService lifecycle
@@ -48,13 +52,17 @@ bool SMCMSIFan::start(IOService *provider) {
 
     setProperty("VersionInfo", kextVersion);
 
-    readRegsSymbol = OSSymbol::withCString(kMSIECReadRegistersFunction);
-    if (!readRegsSymbol) {
+    readRegsSymbol  = OSSymbol::withCString(kMSIECReadRegistersFunction);
+    setChargeSymbol = OSSymbol::withCString(kMSIECSetBatteryChargeFunction);
+    if (!readRegsSymbol || !setChargeSymbol) {
         SYSLOG("msifan", "failed to create function symbol");
         return false;
     }
 
     // Keys must be added in strictly ascending order (sorted key storage).
+    VirtualSMCAPI::addKey(KeyBCLM, vsmcPlugin.data,
+        VirtualSMCAPI::valueWithUint8(100, new SMCBatteryLimitValue,
+                                      SMC_KEY_ATTRIBUTE_READ | SMC_KEY_ATTRIBUTE_WRITE));
     // Read-only fan modes: fan speed is controlled by the agent's modes and
     // curve, never by SMC clients.
     struct FanKeys { SMC_KEY ac, id, md, mn, mx; const char *name; };
@@ -152,6 +160,7 @@ void SMCMSIFan::stop(IOService *provider) {
     }
     OSSafeReleaseNULL(ecService);
     OSSafeReleaseNULL(readRegsSymbol);
+    OSSafeReleaseNULL(setChargeSymbol);
     IOService::stop(provider);
 }
 
@@ -177,11 +186,15 @@ void SMCMSIFan::refreshSensors() {
     }
 
     if (ecService) {
-        static const uint8_t offsets[6] = {
+        // Write before the read below, so the cache picks up the new limit.
+        applyPendingBatteryLimit();
+
+        static const uint8_t offsets[7] = {
             kMSI_EC_GPU_TEMP_ADDR,
             kMSI_EC_FAN_CPU_HI, kMSI_EC_FAN_CPU_LO,
             kMSI_EC_FAN_GPU_HI, kMSI_EC_FAN_GPU_LO,
             kMSI_EC_COOLER_BOOST_ADDR,
+            kMSI_EC_BATTERY_CHARGE_ADDR,
         };
         uint8_t v[arrsize(offsets)] = {};
         IOReturn r = ecService->callPlatformFunction(readRegsSymbol, false,
@@ -193,6 +206,7 @@ void SMCMSIFan::refreshSensors() {
             atomic_store_explicit(&fanRPM[1], msiECToRPM(v[3], v[4]), memory_order_relaxed);
             atomic_store_explicit(&fanForced,
                                   (v[5] & kMSI_EC_COOLER_BOOST_MASK) ? 1 : 0, memory_order_relaxed);
+            atomic_store_explicit(&batteryLimit, msiECToBatteryLimit(v[6]), memory_order_relaxed);
         } else {
             // Keep the previous sample: one EC timeout should not make the
             // fan look stopped.
@@ -201,6 +215,20 @@ void SMCMSIFan::refreshSensors() {
     }
 
     poller->setTimeoutMS(PollIntervalMS);
+}
+
+void SMCMSIFan::applyPendingBatteryLimit() {
+    uint8_t pct = atomic_exchange_explicit(&pendingBatteryLimit, 0, memory_order_acq_rel);
+    if (pct == 0) return;
+    IOReturn r = ecService->callPlatformFunction(setChargeSymbol, false,
+                     reinterpret_cast<void *>(static_cast<uintptr_t>(pct)), nullptr, nullptr, nullptr);
+    if (r == kIOReturnSuccess) {
+        SYSLOG("msifan", "BCLM -> battery charge limit %u%%", pct);
+    } else {
+        // Not retried: BCLM then reads back the EC's actual limit, which
+        // tells the client the write did not take.
+        SYSLOG("msifan", "BCLM %u%% not applied: 0x%08X", pct, r);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +244,22 @@ SMC_RESULT SMCFanRPMValue::readAccess() {
 SMC_RESULT SMCFanModeValue::readAccess() {
     *reinterpret_cast<uint8_t *>(data) = atomic_load_explicit(&SMCMSIFan::fanForced, memory_order_relaxed);
     return SmcSuccess;
+}
+
+SMC_RESULT SMCBatteryLimitValue::readAccess() {
+    // A write not applied yet reads back as written, like a real SMC.
+    uint8_t pct = atomic_load_explicit(&SMCMSIFan::pendingBatteryLimit, memory_order_acquire);
+    if (pct == 0) pct = atomic_load_explicit(&SMCMSIFan::batteryLimit, memory_order_relaxed);
+    *reinterpret_cast<uint8_t *>(data) = pct;
+    return SmcSuccess;
+}
+
+SMC_RESULT SMCBatteryLimitValue::update(const SMC_DATA *src) {
+    uint8_t pct = *reinterpret_cast<const uint8_t *>(src);
+    if (pct < kMSIBatteryLimitMinPct || pct > 100)
+        return SmcBadArgumentError;
+    atomic_store_explicit(&SMCMSIFan::pendingBatteryLimit, pct, memory_order_release);
+    return VirtualSMCValue::update(src);
 }
 
 SMC_RESULT SMCGpuTempValue::readAccess() {

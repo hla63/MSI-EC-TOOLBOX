@@ -46,6 +46,11 @@ IOReturn MSIECToolboxDriver::callPlatformFunction(const OSSymbol *functionName,
         return MSIECCore::readRegisters(static_cast<const uint8_t *>(param1),
                                         static_cast<uint8_t *>(param2), count);
     }
+    if (functionName && functionName->isEqualTo(kMSIECSetBatteryChargeFunction)) {
+        auto percent = reinterpret_cast<uintptr_t>(param1);
+        if (percent > 100) return kIOReturnBadArgument;
+        return MSIECCore::setBatteryCharge(static_cast<uint8_t>(percent));
+    }
     return IOService::callPlatformFunction(functionName, waitForFunction,
                                            param1, param2, param3, param4);
 }

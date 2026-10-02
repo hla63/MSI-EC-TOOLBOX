@@ -29,8 +29,8 @@ MSI-EC-TOOLBOX/
 ├── SMCMSIFan/              ← VirtualSMC Plugin (RPM fan → SMC Keys)
 │   ├── SMCMSIFan.xcodeproj/
 │   └── Sources/
-│       ├── SMCMSIFan.h / .cpp             Polling EC 0xCC–0xCD → F0Ac / FNum
-│       ├── SMCMSIFanKeys.h                SMC keys (F0Ac, F0Mn, F0Mx, FNum)
+│       ├── SMCMSIFan.h / .cpp             EC polling (fans, iGPU temp, charge limit) → SMC keys
+│       ├── SMCMSIFanKeys.h                SMC keys (BCLM, F0xx, F1xx, FNum, TG0P)
 │       └── Info.plist
 ├── LaunchAgent/            ← App (Swift, macOS userspace)
 │   ├── Sources/                           Agent sources (main.swift = entry point)
@@ -222,6 +222,8 @@ Same encoding as the Linux [msi-ec](https://github.com/BeardOverflow/msi-ec) dri
 | `0x64` (bit 7 clear) | No limit, full charge (firmware default) |
 | `0xD0` (`0x80 \| 80`) | Stop at 80% — set by the menu item |
 | `0xBC` (`0x80 \| 60`) | Stop at 60% — MSI Center Super Battery mode (confirmed by dump) |
+
+SMCMSIFan also publishes this limit as the SMC key `BCLM` (read/write, 10–100 %), so macOS tools that set the charge limit of Intel Macs (AlDente, `bclm`) drive the EC directly. A write is applied within a second; the agent's menu picks it up while it is open. macOS's own "Optimized Battery Charging" does not use `BCLM` and has no effect on this laptop's charger.
 
 ---
 

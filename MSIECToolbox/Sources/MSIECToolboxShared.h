@@ -100,6 +100,7 @@ static constexpr uint32_t kMSI_EC_BATTERY_CHARGE_ADDR    = 0xEF;
 static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_ENABLE   = 0x80;
 static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_MASK     = 0x7F;
 static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_FULL    = 0x64;  // no limit (firmware default)
+static constexpr uint8_t  kMSIBatteryLimitMinPct         = 10;    // msi-ec range: 10-100
 
 // ---------------------------------------------------------------------------
 // Keyboard backlight (EC 0xF3, confirmed by msi-ec Linux driver CONF_G1_5)
@@ -265,7 +266,7 @@ enum : uint8_t {
 };
 
 struct MSIBatteryChargeState {
-    uint8_t percent;    // set: 60, 80 or 100; get: 10-100
+    uint8_t percent;    // 10-100, 100 = no limit
     uint8_t reserved[3];
 } __attribute__((packed));
 
@@ -320,6 +321,18 @@ struct MSITouchpadState {
 // ---------------------------------------------------------------------------
 #define kMSIECReadRegistersFunction "MSIECReadRegisters"
 static constexpr uint32_t kMSIECMaxBatchRead = 16;
+
+// Battery charge limit, written by SMCMSIFan when an SMC client sets BCLM.
+//   param1: (void *)(uintptr_t) percent, kMSIBatteryLimitMinPct..100
+//   param2-4: unused
+#define kMSIECSetBatteryChargeFunction "MSIECSetBatteryCharge"
+
+// Decodes EC 0xEF: bit 7 set = limit at bits 0-6, otherwise 100 (no limit).
+static inline uint8_t msiECToBatteryLimit(uint8_t raw) {
+    uint8_t pct = raw & kMSI_EC_BATTERY_LIMIT_MASK;
+    return ((raw & kMSI_EC_BATTERY_LIMIT_ENABLE) && pct >= kMSIBatteryLimitMinPct && pct <= 100)
+           ? pct : 100;
+}
 
 // ---------------------------------------------------------------------------
 // ISW RPM formula

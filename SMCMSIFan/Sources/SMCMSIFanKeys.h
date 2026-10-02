@@ -16,13 +16,14 @@
 
 // ---------------------------------------------------------------------------
 // SMC keys — VirtualSMC key storage must be sorted, so keys are added in
-// strictly ascending order: F0xx < F1xx < FNum < TG0P (within a fan:
+// strictly ascending order: BCLM < F0xx < F1xx < FNum < TG0P (within a fan:
 // Ac < ID < Md < Mn < Mx). The A10M has two fans: F0 = CPU (EC 0xCC-0xCD),
 // F1 = GPU (EC 0xCA-0xCB), confirmed by MSI Creator Center and HWiNFO.
 // TC0P (CPU package temperature) is not published: SMCProcessor already
 // provides it from the CPU's own sensors, and two providers of one key make
 // the value read by macOS ambiguous.
 // ---------------------------------------------------------------------------
+static constexpr SMC_KEY KeyBCLM = SMC_MAKE_IDENTIFIER('B','C','L','M');  // battery charge limit (%)
 static constexpr SMC_KEY KeyF0Ac = SMC_MAKE_IDENTIFIER('F','0','A','c');  // current CPU fan RPM
 static constexpr SMC_KEY KeyF0ID = SMC_MAKE_IDENTIFIER('F','0','I','D');  // fan description ({fds)
 static constexpr SMC_KEY KeyF0Md = SMC_MAKE_IDENTIFIER('F','0','M','d');  // fan mode: 0 auto, 1 forced
