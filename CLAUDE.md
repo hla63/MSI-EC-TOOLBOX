@@ -123,6 +123,8 @@ Login
 
 **CGEventTap health**: macOS disables the tap when the main run loop is too slow (e.g. during a display reconfiguration — rotating to 90°/270°) or on Secure Input, and only reports it with the next event, which is then lost. `MuteObserver` re-enables it on `NSApplication.didChangeScreenParametersNotification` and from a 2 s watchdog, which also shows the menu warning (`setAccessibilityWarning`) when `AXIsProcessTrusted()` is false — the case after a re-signature, where the Accessibility entry looks checked but must be removed and re-added.
 
+**Display rotation (F12)**: `CGDisplayRotation` of the built-in panel is the only source of truth — the next angle is computed from it and the menu item is refreshed from it (at launch, after each rotation, on `didChangeScreenParametersNotification`). Never trust the displayplacer exit code: it rotates first, then looks up `res:` in the *new* orientation (portrait = `1080x1920`), so a resolution miss returns 1 although the screen turned; `res:` cannot be omitted either (width/height are uninitialised without it). One rotation at a time (`rotationInProgress`): presses during a rotation, including auto-repeat, are ignored.
+
 **Mute sync direction**: CoreAudio is the source of truth. EC → CoreAudio only propagates *muting*; if the EC LED reads unmuted while the agent last sent muted, the agent rewrites the LED instead of unmuting CoreAudio (any local process can write the LED bits through the kext).
 
 **UserClient access**: `initWithTask` accepts only the console user (`kIOClientPrivilegeLocalUser`, i.e. the agent) or root (CLI under sudo).
