@@ -41,6 +41,19 @@ echo "=== MSIECToolbox — Installation ==="
 if [ "$SIGN_IDENTITY" = "-" ]; then
     echo "ℹ️  Signature ad-hoc : l'autorisation Accessibilité devra être"
     echo "   ré-accordée après chaque recompilation (voir SIGN_IDENTITY en tête du script)."
+else
+    # Without -v: a self-signed certificate is listed even when it is not
+    # trusted, and codesign can still sign with it.
+    if ! security find-identity -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
+        echo "❌ Identité de signature \"$SIGN_IDENTITY\" introuvable dans le trousseau." >&2
+        echo "   Identités disponibles :" >&2
+        security find-identity -p codesigning >&2 || true
+        echo "   Pour en créer une : Trousseau d'accès › Assistant de certification ›" >&2
+        echo "   Créer un certificat… › Nom : \"$SIGN_IDENTITY\", Type d'identité :" >&2
+        echo "   Racine auto-signée, Type de certificat : Signature de code." >&2
+        echo "   Ou relancez sans SIGN_IDENTITY pour une signature ad-hoc." >&2
+        exit 1
+    fi
 fi
 sudo -v
 
