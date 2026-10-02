@@ -49,27 +49,25 @@ final class MenuBarController {
     private var accessibilityItem:     NSMenuItem!
     private var sepAfterAccessibility: NSMenuItem!
 
-    // ── Préférences — icône barre de menus ───────────────────────────────────
-    // "led" (défaut) = LEDs colorées dynamiques
-    // "ec"           = badge "EC" fixe
-    var prefIconStyle    = "led"
-    var prefRotationMode = "180"  // "180" ou "90cycle"
-    var prefShowOSD      = true
+    // ── Préférences (types et clés : Preferences.swift) ──────────────────────
+    // Lecture seule hors de cette classe : les modifier par les set…/tapPref…
+    // ci-dessous, qui les enregistrent aussi dans UserDefaults.
+    private(set) var prefIconStyle    = IconStyle.led
+    private(set) var prefRotationMode = RotationMode.flip180
+    private(set) var prefShowOSD      = true
 
     // ── Préférences — conditions de changement de couleur LED ────────────────
     // Vert  : aucun des états surveillés n'est actif
     // Orange: mic ou speaker muet (si surveillé)
     // Rouge : mic ET speaker muets (si surveillés), ou caméra coupée (si surveillée)
-    var prefLEDWatchMic:    Bool = true
-    var prefLEDWatchSpk:    Bool = true
-    // "rouge" | "orange" | "jaune" | "none"
-    var prefLEDCamColor:    String = "rouge"
+    private(set) var prefLEDWatchMic = true
+    private(set) var prefLEDWatchSpk = true
+    private(set) var prefLEDCamColor = CameraLEDColor.red
 
     // ── Préférences — sections visibles ──────────────────────────────────────
-    // Persistées dans UserDefaults sous "pref_show_<section>"
-    var prefShowAudio      = true
-    var prefShowMonitoring = true
-    var prefShowFan        = true
+    private(set) var prefShowAudio      = true
+    private(set) var prefShowMonitoring = true
+    private(set) var prefShowFan        = true
     var prefShowBattery    = true
     var prefShowRotation   = true
     var prefShowBacklight  = true
@@ -116,18 +114,18 @@ final class MenuBarController {
     func setup() {
         // Charger les préférences sauvegardées
         let ud = UserDefaults.standard
-        prefIconStyle      = ud.string(forKey: "pref_icon_style")       ?? "led"
-        prefRotationMode   = ud.string(forKey: "pref_rotation_mode")    ?? "180"
-        prefShowOSD        = ud.object(forKey: "pref_show_osd")         as? Bool ?? true
-        prefLEDWatchMic    = ud.object(forKey: "pref_led_watch_mic") as? Bool ?? true
-        prefLEDWatchSpk    = ud.object(forKey: "pref_led_watch_spk") as? Bool ?? true
-        prefLEDCamColor    = ud.string(forKey: "pref_led_cam_color") ?? "rouge"
-        prefShowAudio      = ud.object(forKey: "pref_show_audio")      as? Bool ?? true
-        prefShowMonitoring = ud.object(forKey: "pref_show_monitoring")  as? Bool ?? true
-        prefShowFan        = ud.object(forKey: "pref_show_fan")         as? Bool ?? true
-        prefShowBattery    = ud.object(forKey: "pref_show_battery")     as? Bool ?? true
-        prefShowRotation   = ud.object(forKey: "pref_show_rotation")    as? Bool ?? true
-        prefShowBacklight  = ud.object(forKey: "pref_show_backlight")   as? Bool ?? true
+        prefIconStyle      = ud.pref(.iconStyle,    default: IconStyle.led)
+        prefRotationMode   = ud.pref(.rotationMode, default: RotationMode.flip180)
+        prefLEDCamColor    = ud.pref(.ledCamColor,  default: CameraLEDColor.red)
+        prefShowOSD        = ud.bool(.showOSD,        default: true)
+        prefLEDWatchMic    = ud.bool(.ledWatchMic,    default: true)
+        prefLEDWatchSpk    = ud.bool(.ledWatchSpk,    default: true)
+        prefShowAudio      = ud.bool(.showAudio,      default: true)
+        prefShowMonitoring = ud.bool(.showMonitoring, default: true)
+        prefShowFan        = ud.bool(.showFan,        default: true)
+        prefShowBattery    = ud.bool(.showBattery,    default: true)
+        prefShowRotation   = ud.bool(.showRotation,   default: true)
+        prefShowBacklight  = ud.bool(.showBacklight,  default: true)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -138,7 +136,7 @@ final class MenuBarController {
         lastLEDMic = !micMuted
         lastLEDSpk = !speakerMuted
         lastLEDCam = !cameraActive
-        if prefIconStyle == "ec" {
+        if prefIconStyle == .ec {
             statusItem.length = 28
             statusItem.button?.image = makeECBadgeImage()
             statusItem.button?.imageScaling = .scaleProportionallyDown
@@ -275,13 +273,13 @@ final class MenuBarController {
     private enum LEDColor { case green, orange, red, yellow }
 
     private func makeStatusImage() -> NSImage {
-        if prefIconStyle == "ec" {
+        if prefIconStyle == .ec {
             return makeECBadgeImage()
         }
         // Utiliser les variables watched* pour largeur ET rendu (cohérence avec les prefs)
         let watchedMicMuted = prefLEDWatchMic && micMuted
         let watchedSpkMuted = prefLEDWatchSpk && speakerMuted
-        let watchedCamOff   = prefLEDCamColor != "none" && !cameraActive
+        let watchedCamOff   = prefLEDCamColor != .ignored && !cameraActive
 
         let watchedBothMuted    = watchedMicMuted && watchedSpkMuted
         let watchedOnlyOneMuted = (watchedMicMuted || watchedSpkMuted) && !watchedBothMuted
@@ -296,11 +294,11 @@ final class MenuBarController {
         NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: 18)).fill()
 
         // ── Règles couleur LED ───────────────────────────────────────────
-        // Rouge  : mic+spk muets ET (caméra off surveillée OU caméra "none")
+        // Rouge  : mic+spk muets ET (caméra off surveillée OU caméra .ignored)
         // Orange : un seul audio mauvais, OU caméra seule (couleur = pref caméra)
         // Vert   : aucun état mauvais
 
-        let camNone   = prefLEDCamColor == "none"
+        let camNone   = prefLEDCamColor == .ignored
         let isRouge   = watchedBothMuted && (watchedCamOff || camNone)
 
         // Camera-only bad state: color encodes the severity (yellow/orange/red).
@@ -311,8 +309,8 @@ final class MenuBarController {
         if isRouge {
             ledColor = .red
         } else if camOnlyOff {
-            ledColor = (prefLEDCamColor == "jaune") ? .yellow
-                     : (prefLEDCamColor == "orange") ? .orange : .red
+            ledColor = (prefLEDCamColor == .yellow) ? .yellow
+                     : (prefLEDCamColor == .orange) ? .orange : .red
         } else if watchedMicMuted || watchedSpkMuted || watchedCamOff {
             ledColor = .orange
         } else {
@@ -425,17 +423,17 @@ final class MenuBarController {
             // Redessiner seulement si l'état a changé
             let wMic = self.prefLEDWatchMic && self.micMuted
             let wSpk = self.prefLEDWatchSpk && self.speakerMuted
-            let wCam = self.prefLEDCamColor != "none" && !self.cameraActive
+            let wCam = self.prefLEDCamColor != .ignored && !self.cameraActive
             guard wMic != (self.prefLEDWatchMic && self.lastLEDMic) ||
                   wSpk != (self.prefLEDWatchSpk && self.lastLEDSpk) ||
-                  wCam != (self.prefLEDCamColor != "none" && !self.lastLEDCam) ||
+                  wCam != (self.prefLEDCamColor != .ignored && !self.lastLEDCam) ||
                   self.micMuted     != self.lastLEDMic ||
                   self.speakerMuted != self.lastLEDSpk ||
                   self.cameraActive != self.lastLEDCam else { return }
             self.lastLEDMic = self.micMuted
             self.lastLEDSpk = self.speakerMuted
             self.lastLEDCam = self.cameraActive
-            if self.prefIconStyle == "ec" {
+            if self.prefIconStyle == .ec {
                 self.statusItem.length = 28
             } else {
                 let wm = self.prefLEDWatchMic && self.micMuted
@@ -650,84 +648,76 @@ final class MenuBarController {
         sep?.isHidden = !visible
     }
 
-    private func togglePref(_ key: String, current: inout Bool, items: [NSMenuItem],
+    private func togglePref(_ key: PrefKey, current: inout Bool, items: [NSMenuItem],
                              sep: NSMenuItem?) {
         current.toggle()
-        UserDefaults.standard.set(current, forKey: key)
+        UserDefaults.standard.set(current, for: key)
         setSection(items, sep: sep, visible: current)
     }
 
     @objc func tapPrefAudio() {
-        togglePref("pref_show_audio", current: &prefShowAudio,
+        togglePref(.showAudio, current: &prefShowAudio,
                    items: audioItems, sep: sepAfterAudio)
     }
     @objc func tapPrefMonitoring() {
-        togglePref("pref_show_monitoring", current: &prefShowMonitoring,
+        togglePref(.showMonitoring, current: &prefShowMonitoring,
                    items: monitoringItems, sep: sepAfterMonitor)
     }
     @objc func tapPrefFan() {
-        togglePref("pref_show_fan", current: &prefShowFan,
+        togglePref(.showFan, current: &prefShowFan,
                    items: fanItems, sep: sepAfterFan)
     }
     @objc func tapPrefBattery() {
-        togglePref("pref_show_battery", current: &prefShowBattery,
+        togglePref(.showBattery, current: &prefShowBattery,
                    items: batteryItems, sep: sepAfterBattery)
     }
     @objc func tapPrefRotation() {
-        togglePref("pref_show_rotation", current: &prefShowRotation,
+        togglePref(.showRotation, current: &prefShowRotation,
                    items: rotationItems, sep: sepAfterRotation)
     }
     @objc func tapPrefBacklight() {
-        togglePref("pref_show_backlight", current: &prefShowBacklight,
+        togglePref(.showBacklight, current: &prefShowBacklight,
                    items: backlightItems, sep: sepAfterBacklight)
     }
 
     @objc func tapPrefLEDMic() {
         prefLEDWatchMic.toggle()
-        UserDefaults.standard.set(prefLEDWatchMic, forKey: "pref_led_watch_mic")
+        UserDefaults.standard.set(prefLEDWatchMic, for: .ledWatchMic)
         lastLEDMic = !micMuted; updateLED()
     }
 
     @objc func tapPrefLEDSpk() {
         prefLEDWatchSpk.toggle()
-        UserDefaults.standard.set(prefLEDWatchSpk, forKey: "pref_led_watch_spk")
+        UserDefaults.standard.set(prefLEDWatchSpk, for: .ledWatchSpk)
         lastLEDSpk = !speakerMuted; updateLED()
     }
 
-    @objc func tapPrefLEDCamRouge() {
-        prefLEDCamColor = "rouge"
-        UserDefaults.standard.set("rouge", forKey: "pref_led_cam_color")
+    func setCameraLEDColor(_ color: CameraLEDColor) {
+        prefLEDCamColor = color
+        UserDefaults.standard.set(color, for: .ledCamColor)
         lastLEDCam = !cameraActive; updateLED()
     }
 
-    @objc func tapPrefLEDCamOrange() {
-        prefLEDCamColor = "orange"
-        UserDefaults.standard.set("orange", forKey: "pref_led_cam_color")
-        lastLEDCam = !cameraActive; updateLED()
+    func setRotationMode(_ mode: RotationMode) {
+        prefRotationMode = mode
+        UserDefaults.standard.set(mode, for: .rotationMode)
     }
 
-    @objc func tapPrefLEDCamJaune() {
-        prefLEDCamColor = "jaune"
-        UserDefaults.standard.set("jaune", forKey: "pref_led_cam_color")
-        lastLEDCam = !cameraActive; updateLED()
-    }
-
-    @objc func tapPrefLEDCamNone() {
-        prefLEDCamColor = "none"
-        UserDefaults.standard.set("none", forKey: "pref_led_cam_color")
-        lastLEDCam = !cameraActive; updateLED()
+    func toggleShowOSD() {
+        prefShowOSD.toggle()
+        UserDefaults.standard.set(prefShowOSD, for: .showOSD)
     }
 
     @objc func tapPrefIconLED() {
-        prefIconStyle = "led"
-        UserDefaults.standard.set("led", forKey: "pref_icon_style")
+        prefIconStyle = .led
+        UserDefaults.standard.set(IconStyle.led, for: .iconStyle)
         lastLEDMic = !micMuted  // forcer le redraw
         updateLED()
     }
 
     @objc func tapPrefIconEC() {
-        prefIconStyle = "ec"
-        UserDefaults.standard.set("ec", forKey: "pref_icon_style")
+        prefIconStyle = .ec
+        UserDefaults.standard.set(IconStyle.ec, for: .iconStyle)
         statusItem.length = 28
         statusItem.button?.image = makeECBadgeImage()
         statusItem.button?.imageScaling = .scaleProportionallyDown

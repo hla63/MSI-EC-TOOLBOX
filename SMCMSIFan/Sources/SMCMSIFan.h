@@ -4,7 +4,6 @@
 // VirtualSMC plugin for MSI Modern 15 A10M.
 // Publishes the following SMC keys (readable by iStatMenus, HWMonitorSMC2, etc.):
 //   F0Ac / F0Mn / F0Mx / FNum  — CPU fan RPM
-//   TC0P                        — CPU package temperature (°C)
 //   TG0P                        — integrated GPU temperature (°C)
 //
 // EC values are sampled every second through MSIECToolboxDriver (shared EC
@@ -55,7 +54,6 @@ public:
     // Latest EC samples, read by the SMC value classes below. Static so that
     // the value objects owned by VirtualSMC never point into a freed instance.
     static _Atomic(uint16_t) cpuRPM;
-    static _Atomic(uint8_t)  cpuTempC;
     static _Atomic(uint8_t)  gpuTempC;
 };
 
@@ -66,12 +64,6 @@ public:
 
 // F0Ac — current CPU fan RPM (fpe2 format)
 class SMCFanRPMValue : public VirtualSMCValue {
-protected:
-    SMC_RESULT readAccess() override;
-};
-
-// TC0P — CPU package temperature (sp78 format)
-class SMCCpuTempValue : public VirtualSMCValue {
 protected:
     SMC_RESULT readAccess() override;
 };
