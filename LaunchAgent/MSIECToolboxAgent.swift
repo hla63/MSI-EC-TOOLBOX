@@ -172,6 +172,7 @@ private let kF14KeyCode: CGKeyCode = 79   // F5 mute mic    (e071→ADB 4f)
 private let kF13KeyCode: CGKeyCode = 111  // F12 rotation   (e072→ADB 6f)
 private let kF6KeyCode:  CGKeyCode = 80   // F6 caméra      (e06e→ADB 50, F19) — was 118 = standard F4
 private let kF8KeyCode:  CGKeyCode = 100  // F8 backlight   (keycode standard macOS)
+private let kF4TouchpadKeyCode: CGKeyCode = 90  // F4 trackpad (Ctrl+Win+F24, PS2 76→ADB 5a, F20)
 
 // ---------------------------------------------------------------------------
 // MARK: – Profils de courbe fan
@@ -1449,6 +1450,12 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                     NSLog("[MSIECToolboxAgent] F6 (keycode 80) intercepté → toggle caméra")
                     me.toggleCameraState()
                     return nil
+                case kF4TouchpadKeyCode:
+                    // Arrives with Control+Command held (the hotkey's Ctrl+Win);
+                    // only the key itself is swallowed, the modifiers pass through.
+                    NSLog("[MSIECToolboxAgent] F4 (keycode 90) intercepté → toggle trackpad")
+                    me.toggleTrackpad()
+                    return nil
                 case kF8KeyCode:
                     NSLog("[MSIECToolboxAgent] F8 (keycode 100) intercepté → toggle rétroéclairage clavier")
                     me.toggleKbBacklight()
@@ -1470,7 +1477,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         eventTapSource = source
         menuBar.setAccessibilityWarning(false)
         startTapWatchdog()
-        NSLog("[MSIECToolboxAgent] CGEventTap installé — F5(79) + F6(118) + F8(100) + F12(111)")
+        NSLog("[MSIECToolboxAgent] CGEventTap installé — F4(90) + F5(79) + F6(80) + F8(100) + F12(111)")
     }
 
     // ── Tap watchdog ─────────────────────────────────────────────────────────

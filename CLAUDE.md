@@ -114,7 +114,7 @@ Login
   LaunchAgent (com.msi.MSIECToolboxAgent)
     IOKit open MSIECToolboxDriver → UserClient (16 selectors)
     CoreAudio listener → system mute changes → selector setMuteState → EC 0x2B/0x2C (LED bit 0x04)
-    CGEventTap (requires Accessibility) → keycodes 79/111/80/100 → direct actions
+    CGEventTap (requires Accessibility) → keycodes 79/111/80/90/100 → direct actions
     500ms poll → selectors 4 (getAllState), 11 (getKbBacklight), 9 (getSystemState)
     2s timer   → selector 5 (readFanRPM)
 ```
@@ -125,9 +125,9 @@ Login
 
 **Display rotation (F12)**: `CGDisplayRotation` of the built-in panel is the only source of truth — the next angle is computed from it and the menu item is refreshed from it (at launch, after each rotation, on `didChangeScreenParametersNotification`). Never trust the displayplacer exit code: it rotates first, then looks up `res:` in the *new* orientation (portrait = `1080x1920`), so a resolution miss returns 1 although the screen turned; `res:` cannot be omitted either (width/height are uninitialised without it). One rotation at a time (`rotationInProgress`): presses during a rotation, including auto-repeat, are ignored.
 
-**Keyboard map (SSDT ↔ agent)**: the SSDT maps MSI hotkey scancodes to ADB codes and the agent intercepts the resulting keycodes: `e071`→`0x4F` (79, mic), `e072`→`0x6F` (111, rotation), `e06e`→`0x50` (80, F19, camera), plus the standard F8 (100, backlight). An ADB code shared with a standard key is intercepted for both: the camera used `0x76` (118 = standard F4) until v4 of the SSDT, so Fn+F4 toggled the camera. Change SSDT values only, never the number of entries (RMCF parsing), and keep the agent's `kF*KeyCode` constants in sync. To identify an unknown key: `defaults write MSIECToolboxAgent debug_keys -bool true`, restart the agent, read `[debug_keys]` lines in the log, then turn it off — it logs every keystroke.
+**Keyboard map (SSDT ↔ agent)**: the SSDT maps MSI hotkey scancodes to ADB codes and the agent intercepts the resulting keycodes: `e071`→`0x4F` (79, mic), `e072`→`0x6F` (111, rotation), `e06e`→`0x50` (80, F19, camera), `76`→`0x5A` (90, F20, touchpad — the MSI F4 hotkey sends Ctrl+Win+F24, F24 being PS2 `0x76`, unmapped by VoodooPS2), plus the standard F8 (100, backlight). An ADB code shared with a standard key is intercepted for both: the camera used `0x76` (118 = standard F4) until v4 of the SSDT, so Fn+F4 toggled the camera. When adding an entry, update the `Package (n)` count (iasl rejects a mismatch), and keep the agent's `k*KeyCode` constants in sync. To identify a key that macOS never receives, enable VoodooPS2's `LogScanCodes` (set it to 1 on `ApplePS2Keyboard` with `IORegistryEntrySetCFProperties`, as root) and read `sudo dmesg | grep "sending key"` — `xx=80` means the scancode is unmapped; turn it back to 0 afterwards. For keys macOS does receive: `defaults write MSIECToolboxAgent debug_keys -bool true`, restart the agent, read `[debug_keys]` lines, then turn it off — both log every keystroke.
 
-**Touchpad (selector 16)**: not an EC register. The kext relays VoodooPS2's keyboard→touchpad messages (`iokit_vendor_specific_msg(100)` set, `101` get, data `bool*`) to every service with `RM,deliverNotifications = true` — VoodooI2CHID's `VoodooI2CMultitouchHIDEventDriver` and the VoodooPS2 trackpads handle them. The menu item "Trackpad" toggles it; the MSI F4 hotkey is not bound yet (its code is unknown).
+**Touchpad (selector 16)**: not an EC register. The kext relays VoodooPS2's keyboard→touchpad messages (`iokit_vendor_specific_msg(100)` set, `101` get, data `bool*`) to every service with `RM,deliverNotifications = true` — VoodooI2CHID's `VoodooI2CMultitouchHIDEventDriver` and the VoodooPS2 trackpads handle them. The menu item "Trackpad" and the MSI F4 hotkey (keycode 90) toggle it.
 
 **Mute sync direction**: CoreAudio is the source of truth. EC → CoreAudio only propagates *muting*; if the EC LED reads unmuted while the agent last sent muted, the agent rewrites the LED instead of unmuting CoreAudio (any local process can write the LED bits through the kext).
 
