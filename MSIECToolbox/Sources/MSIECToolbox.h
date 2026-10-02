@@ -51,7 +51,7 @@ public:
 
     // --- Battery charge limit -----------------------------------------------
 
-    static IOReturn setBatteryCharge(uint8_t percent);  // 80 or 100
+    static IOReturn setBatteryCharge(uint8_t percent);  // 10-100, 100 = no limit
     static IOReturn getBatteryCharge(uint8_t &outPercent);
 
     // --- Touchpad (relayed to the touchpad drivers, not the EC) -------------

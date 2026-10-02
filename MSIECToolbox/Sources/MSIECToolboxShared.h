@@ -60,10 +60,10 @@ static constexpr uint32_t kMSI_EC_FAN_CPU_SPD_BASE  = 0x72;  // 6 registers + 0x
 static constexpr uint8_t  kMSI_EC_FAN_CURVE_POINTS  = 6;     // editable breakpoints
 
 // ---------------------------------------------------------------------------
-// GPU fan curve breakpoints (present in EC on A10M but effect unconfirmed)
-// The A10M has a single physical fan (iGPU only). EC register 0x89 returned
-// 0x2D (45%) in dumps while 0x71 (CPU fan %) was 0 — likely a firmware
-// residual or mirror value. Do not write these registers without validation.
+// GPU fan curve breakpoints (second fan; effect of this curve unconfirmed)
+// The A10M has two fans even without a discrete GPU: fan 1 "CPU" (0xCC-0xCD)
+// and fan 2 "GPU" (0xCA-0xCB), both reported with independent RPM by MSI
+// Creator Center and HWiNFO. Do not write these registers without validation.
 // ---------------------------------------------------------------------------
 
 static constexpr uint32_t kMSI_EC_FAN_GPU_TEMP0 = 0x82;  // default: 50°C
@@ -88,20 +88,19 @@ static constexpr uint32_t kMSI_EC_FAN_GPU_TEMP_BASE = 0x82;
 static constexpr uint32_t kMSI_EC_FAN_GPU_SPD_BASE  = 0x8A;
 
 // ---------------------------------------------------------------------------
-// Battery charge stop threshold (EC 0xEF, confirmed by dump on 1551EMS1)
+// Battery charge stop threshold (EC 0xEF)
 //
-// Known encodings:
-//   0x64 (100) = full charge (firmware default)
-//   0x50  (80) = 80% stop
-//   0xBC (188) = 60% stop ("Super Battery" mode in MSI Center)
-//
-// WARNING: the encoding is non-linear. Confirm each new value with an EC
-// dump before exposing it in the UI.
+// Same encoding as the Linux msi-ec driver for CONF_G1_5 (1551EMS1):
+//   bit 7 set   = limit enabled, bits 0-6 = stop percentage (10-100)
+//                 0xBC = 60% ("Super Battery" in MSI Center, confirmed by dump)
+//                 0xD0 = 80%
+//   bit 7 clear = no limit, full charge (firmware default 0x64)
 // ---------------------------------------------------------------------------
-static constexpr uint32_t kMSI_EC_BATTERY_CHARGE_ADDR  = 0xEF;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_100   = 0x64;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_80    = 0x50;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_60    = 0xBC;  // confirmed by dump
+static constexpr uint32_t kMSI_EC_BATTERY_CHARGE_ADDR    = 0xEF;
+static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_ENABLE   = 0x80;
+static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_MASK     = 0x7F;
+static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_FULL    = 0x64;  // no limit (firmware default)
+static constexpr uint8_t  kMSIBatteryLimitMinPct         = 10;    // msi-ec range: 10-100
 
 // ---------------------------------------------------------------------------
 // Keyboard backlight (EC 0xF3, confirmed by msi-ec Linux driver CONF_G1_5)
@@ -131,8 +130,8 @@ static constexpr uint32_t kMSI_EC_GPU_TEMP_ADDR     = 0x80;  // direct °C
 
 // Real-time fan speed % (read-only, range 0-150)
 static constexpr uint32_t kMSI_EC_CPU_FAN_PCT_ADDR  = 0x71;
-// NOTE: on A10M (iGPU only), 0x89 returned 0x2D (45%) in dumps while 0x71
-// was 0 (fan stopped). Likely a firmware residual — treat as unreliable.
+// Second ("GPU") fan. Dumps showed 0x2D (45%) while 0x71 was 0: the two fans
+// follow different curves.
 static constexpr uint32_t kMSI_EC_GPU_FAN_PCT_ADDR  = 0x89;
 
 // Fan mode logical values (independent of raw EC bytes)
@@ -249,7 +248,7 @@ struct MSISystemState {
     uint8_t cpuTempC;     // °C
     uint8_t gpuTempC;     // °C (iGPU only on A10M)
     uint8_t cpuFanPct;    // %, range 0-150
-    uint8_t gpuFanPct;    // %, always 0 on A10M (no dedicated GPU fan)
+    uint8_t gpuFanPct;    // %, second ("GPU") fan
     uint8_t fanMode;      // MSIFanModeValue
     uint8_t shiftMode;    // MSIShiftModeValue
     uint8_t coolerBoost;  // 0 or 1
@@ -267,7 +266,7 @@ enum : uint8_t {
 };
 
 struct MSIBatteryChargeState {
-    uint8_t percent;    // 80 or 100
+    uint8_t percent;    // 10-100, 100 = no limit
     uint8_t reserved[3];
 } __attribute__((packed));
 
@@ -322,6 +321,18 @@ struct MSITouchpadState {
 // ---------------------------------------------------------------------------
 #define kMSIECReadRegistersFunction "MSIECReadRegisters"
 static constexpr uint32_t kMSIECMaxBatchRead = 16;
+
+// Battery charge limit, written by SMCMSIFan when an SMC client sets BCLM.
+//   param1: (void *)(uintptr_t) percent, kMSIBatteryLimitMinPct..100
+//   param2-4: unused
+#define kMSIECSetBatteryChargeFunction "MSIECSetBatteryCharge"
+
+// Decodes EC 0xEF: bit 7 set = limit at bits 0-6, otherwise 100 (no limit).
+static inline uint8_t msiECToBatteryLimit(uint8_t raw) {
+    uint8_t pct = raw & kMSI_EC_BATTERY_LIMIT_MASK;
+    return ((raw & kMSI_EC_BATTERY_LIMIT_ENABLE) && pct >= kMSIBatteryLimitMinPct && pct <= 100)
+           ? pct : 100;
+}
 
 // ---------------------------------------------------------------------------
 // ISW RPM formula

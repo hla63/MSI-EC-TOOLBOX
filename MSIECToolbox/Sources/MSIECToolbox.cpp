@@ -429,21 +429,18 @@ IOReturn MSIECCore::setFanMode(MSIFanModeValue mode) {
 // ---------------------------------------------------------------------------
 // setBatteryCharge — battery charge stop threshold via EC 0xEF
 //
-// percent: 80 or 100 only (values confirmed on A10M 1551EMS1)
-//   0x50 (80)  = stop at 80% — recommended for long-term battery health
-//   0x64 (100) = full charge (firmware default behaviour)
-//
-// Note: 60% (0xBC) is not exposed here — its encoding is non-linear and
-// requires further validation before being added to the UI.
+// percent: 10-99 = stop charging at that level (0x80 | percent, the msi-ec
+//          encoding: 60% = 0xBC, 80% = 0xD0)
+//          100   = no limit (0x64, firmware default, bit 7 clear)
+// The old 0x50 value for 80% had bit 7 clear, i.e. no limit at all.
+// Callers: the agent (selector 12) and SMCMSIFan (BCLM key).
 // ---------------------------------------------------------------------------
 
 IOReturn MSIECCore::setBatteryCharge(uint8_t percent) {
-    uint8_t ecVal;
-    switch (percent) {
-        case 80:  ecVal = kMSI_EC_BATTERY_CHARGE_80;  break;
-        case 100: ecVal = kMSI_EC_BATTERY_CHARGE_100; break;
-        default:  return kIOReturnBadArgument;
-    }
+    if (percent < kMSIBatteryLimitMinPct || percent > 100)
+        return kIOReturnBadArgument;
+    uint8_t ecVal = (percent == 100) ? kMSI_EC_BATTERY_CHARGE_FULL
+                                     : (uint8_t)(kMSI_EC_BATTERY_LIMIT_ENABLE | percent);
     MSIEC_LOG("setBatteryCharge: %d%% -> EC[0xEF]=0x%02X", (int)percent, ecVal);
     return ecWrite(kMSI_EC_BATTERY_CHARGE_ADDR, ecVal);
 }
@@ -452,11 +449,7 @@ IOReturn MSIECCore::getBatteryCharge(uint8_t &outPercent) {
     uint8_t raw = 0;
     IOReturn r = ecRead(kMSI_EC_BATTERY_CHARGE_ADDR, raw);
     if (r != kIOReturnSuccess) return r;
-    switch (raw) {
-        case kMSI_EC_BATTERY_CHARGE_80:  outPercent = 80;  break;
-        case kMSI_EC_BATTERY_CHARGE_100: outPercent = 100; break;
-        default:                         outPercent = 100; break;  // unknown value → safe default
-    }
+    outPercent = msiECToBatteryLimit(raw);
     MSIEC_LOG("getBatteryCharge: EC[0xEF]=0x%02X -> %d%%", raw, (int)outPercent);
     return kIOReturnSuccess;
 }

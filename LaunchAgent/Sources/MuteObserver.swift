@@ -562,7 +562,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     private enum PollInterval {
         static let menuClosed: DispatchTimeInterval = .seconds(1)
         static let menuOpen:   DispatchTimeInterval = .milliseconds(500)
-        static let rpmEvery    = 4  // menu-open ticks between RPM reads (2 s)
+        static let rpmEvery    = 4  // menu-open ticks between RPM / charge limit reads (2 s)
     }
 
     private struct PollSnapshot {
@@ -570,6 +570,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         let backlight: UInt8?
         let system:    MSISystemState?
         let rpm:       (cpuRPM: Int, gpuRPM: Int)?
+        let battery:   UInt8?  // can change behind the agent (BCLM via SMCMSIFan)
     }
 
     private var pollFull     = false  // client.queue only
@@ -583,9 +584,11 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             let full = self.pollFull
             var rpm: (cpuRPM: Int, gpuRPM: Int)? = nil
+            var battery: UInt8? = nil
             if full {
                 if self.rpmCountdown <= 0 {
-                    rpm = self.client.readFanRPM()
+                    rpm     = self.client.readFanRPM()
+                    battery = self.client.getBatteryCharge()
                     self.rpmCountdown = PollInterval.rpmEvery
                 }
                 self.rpmCountdown -= 1
@@ -593,7 +596,8 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             let snap = PollSnapshot(mute:      self.client.readECMuteState(),
                                     backlight: full ? self.client.getKbBacklight()  : nil,
                                     system:    full ? self.client.readSystemState() : nil,
-                                    rpm:       rpm)
+                                    rpm:       rpm,
+                                    battery:   battery)
             DispatchQueue.main.async { self.applyPoll(snap) }
         }
         timer.resume()
@@ -656,6 +660,9 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         }
         if let rpm = snap.rpm {
             menuBar.updateFanItems(cpuRPM: rpm.cpuRPM, gpuRPM: rpm.gpuRPM)
+        }
+        if let pct = snap.battery {
+            menuBar.updateBatteryLimitItem(percent: pct)
         }
     }
 

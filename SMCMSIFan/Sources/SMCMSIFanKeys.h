@@ -16,17 +16,25 @@
 
 // ---------------------------------------------------------------------------
 // SMC keys — VirtualSMC key storage must be sorted, so keys are added in
-// strictly ascending order: F0Ac < F0ID < F0Md < F0Mn < F0Mx < FNum < TG0P
+// strictly ascending order: BCLM < F0xx < F1xx < FNum < TG0P (within a fan:
+// Ac < ID < Md < Mn < Mx). The A10M has two fans: F0 = CPU (EC 0xCC-0xCD),
+// F1 = GPU (EC 0xCA-0xCB), confirmed by MSI Creator Center and HWiNFO.
 // TC0P (CPU package temperature) is not published: SMCProcessor already
 // provides it from the CPU's own sensors, and two providers of one key make
 // the value read by macOS ambiguous.
 // ---------------------------------------------------------------------------
+static constexpr SMC_KEY KeyBCLM = SMC_MAKE_IDENTIFIER('B','C','L','M');  // battery charge limit (%)
 static constexpr SMC_KEY KeyF0Ac = SMC_MAKE_IDENTIFIER('F','0','A','c');  // current CPU fan RPM
 static constexpr SMC_KEY KeyF0ID = SMC_MAKE_IDENTIFIER('F','0','I','D');  // fan description ({fds)
 static constexpr SMC_KEY KeyF0Md = SMC_MAKE_IDENTIFIER('F','0','M','d');  // fan mode: 0 auto, 1 forced
 static constexpr SMC_KEY KeyF0Mn = SMC_MAKE_IDENTIFIER('F','0','M','n');  // minimum CPU fan RPM
 static constexpr SMC_KEY KeyF0Mx = SMC_MAKE_IDENTIFIER('F','0','M','x');  // maximum CPU fan RPM
-static constexpr SMC_KEY KeyFNum = SMC_MAKE_IDENTIFIER('F','N','u','m');  // number of fans
+static constexpr SMC_KEY KeyF1Ac = SMC_MAKE_IDENTIFIER('F','1','A','c');  // current GPU fan RPM
+static constexpr SMC_KEY KeyF1ID = SMC_MAKE_IDENTIFIER('F','1','I','D');  // fan description ({fds)
+static constexpr SMC_KEY KeyF1Md = SMC_MAKE_IDENTIFIER('F','1','M','d');  // fan mode: 0 auto, 1 forced
+static constexpr SMC_KEY KeyF1Mn = SMC_MAKE_IDENTIFIER('F','1','M','n');  // minimum GPU fan RPM
+static constexpr SMC_KEY KeyF1Mx = SMC_MAKE_IDENTIFIER('F','1','M','x');  // maximum GPU fan RPM
+static constexpr SMC_KEY KeyFNum = SMC_MAKE_IDENTIFIER('F','N','u','m');  // number of fans (2)
 static constexpr SMC_KEY KeyTG0P = SMC_MAKE_IDENTIFIER('T','G','0','P');  // GPU temperature
 
 // F0ID payload ({fds type, 16 bytes), same layout as Apple's and as
@@ -34,9 +42,9 @@ static constexpr SMC_KEY KeyTG0P = SMC_MAKE_IDENTIFIER('T','G','0','P');  // GPU
 struct MSIFanDescription {
     uint8_t type        {0};   // 0 = PWM fan with tachometer
     uint8_t zone        {1};
-    uint8_t location    {13};  // CENTER_MID_REAR (single fan)
+    uint8_t location    {12};  // LEFT_MID_REAR (nominal: positions are not reported)
     uint8_t reserved    {0};
-    char    function[12] {'C', 'P', 'U'};  // name shown by iStat / HWMonitor
+    char    function[12] {};   // name shown by iStat / HWMonitor
 };
 static_assert(sizeof(MSIFanDescription) == 16, "{fds is 16 bytes");
 

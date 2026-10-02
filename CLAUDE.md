@@ -105,13 +105,17 @@ Boot (OpenCore)
          class MSIECToolbox (Lilu plugin_start.cpp, matches IOResources)
            → kern_start → pluginStart() → hook writeECField
          MSIECToolboxDriver (IOService, matches PNP0C09)
-           → publishes UserClient + serves "MSIECReadRegisters" (callPlatformFunction)
+           → publishes UserClient + serves "MSIECReadRegisters" and
+             "MSIECSetBatteryCharge" (callPlatformFunction)
   VirtualSMC.kext
     └─ SMCMSIFan.kext (IOService on IOResources)
          registerHandler → SubmitPlugin → 1s IOTimerEventSource on its own workloop
          refreshSensors() → MSIECToolboxDriver::callPlatformFunction → cache
-         readAccess() returns the cache: F0Ac, F0ID, F0Md, F0Mn, F0Mx, FNum, TG0P
-         (F0Md read-only: 1 while Cooler Boost forces the fan; F0ID names it "CPU")
+         readAccess() returns the cache: F0Ac/ID/Md/Mn/Mx (fan "CPU", EC 0xCC-0xCD),
+         F1Ac/ID/Md/Mn/Mx (fan "GPU", EC 0xCA-0xCB), FNum = 2, TG0P, BCLM (EC 0xEF)
+         (FxMd read-only: 1 while Cooler Boost forces the fans)
+         BCLM is writable (AlDente, bclm): update() runs in VirtualSMC's MMIO/PMIO
+         trap and only stores the request; the next tick writes EC 0xEF, then reads it
          (TC0P is left to SMCProcessor — never publish a key another plugin owns)
 
 Login
@@ -121,7 +125,7 @@ Login
     CGEventTap (requires Accessibility) → keycodes 79/111/80/90/100 → direct actions
     EC poll, menu closed → selector 4 (getAllState) every 1 s (icon + mute sync)
     EC poll, menu open   → immediate, then 4 + 11 (getKbBacklight) + 9 (getSystemState)
-                           every 500 ms, and 5 (readFanRPM) every 2 s
+                           every 500 ms, and 5 (readFanRPM) + 13 (getBatteryCharge) every 2 s
 ```
 
 **Agent source layout** (`LaunchAgent/Sources/`, one module, `main.swift` is the only file allowed top-level code): `ECTypes` (mirror of the kext ABI), `ECClient` (IOKit client + its serial queue), `MenuBarController` (status item, menu, preference state), `MuteObserver` (app delegate: key tap and Fn keycodes, CoreAudio sync, EC polling, rotation, menu actions), `MuteOSD`, `PreferencesPanel`, `ECDumpPanel`, `FanCurvePanel`, `FanProfiles`, `Preferences` (typed UserDefaults keys and enums — raw values are the strings stored by earlier versions, never rename them; `MenuBarController` owns the values, read-only elsewhere, and is the only writer). File-scope `private` declarations (keycodes, `WatchBox`, `OSDView`) are only visible in their file — keep them next to their only user. `MSIECToolboxInstaller.swift` is a separate executable, not part of the agent.
@@ -145,7 +149,7 @@ Login
 **EC bus ownership** — the most important invariant. All EC access in both kexts goes through `MSIECCore` (`MSIECToolbox.cpp`):
 - `MSIECCore::BusGuard` (RAII) takes `ecLock`, then the ACPI global lock of the PNP0C09 device (`acquireGlobalLock`, 50 ms timeout → `kIOReturnBusy`). AML takes the same global lock around EC fields declared with the `Lock` rule. If the platform has no global lock, the guard degrades to `ecLock` only (logged once).
 - `ecReadLocked` / `ecWriteLocked` are the only raw RD_EC/WR_EC sequences; call them only while holding a `BusGuard`. Multi-register operations (fan curve, Cooler Boost RMW, system state, RPM hi/lo) hold one guard for the whole sequence; `dumpEC` takes one per register so the global lock is never held for 256 reads.
-- SMCMSIFan never touches ports `0x62`/`0x66`: it calls `MSIECToolboxDriver::callPlatformFunction("MSIECReadRegisters", offsets, values, count)` (contract in `MSIECToolboxShared.h`). No symbol is linked across kexts; it looks the driver up by class name, so load order between the two does not matter.
+- SMCMSIFan never touches ports `0x62`/`0x66`: it calls `MSIECToolboxDriver::callPlatformFunction("MSIECReadRegisters", offsets, values, count)` and `("MSIECSetBatteryCharge", percent)` (contract in `MSIECToolboxShared.h`), only from its poller workloop — never from a `readAccess()`/`update()`, which run in VirtualSMC's trap handler. No symbol is linked across kexts; it looks the driver up by class name, so load order between the two does not matter.
 - `hookedWriteECField` runs in ACPI context and must never take a `BusGuard`.
 - Residual risk: AppleACPIEC's own non-AML EC traffic (SCI query handling) is not covered by the global lock.
 
@@ -174,8 +178,9 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0x68` | direct °C | CPU temp |
 | `0x71` | 0–150% | CPU fan speed % |
 | `0xCC–0xCD` | big-endian | CPU fan RPM (ISW formula: `RPM = ((325 - val) * 16) + 1480`) |
+| `0xCA–0xCB` | big-endian | Second ("GPU") fan RPM, same formula — the A10M has **two fans** despite having no discrete GPU (confirmed by MSI Creator Center and HWiNFO) |
 | `0xF3` | `0x80–0x83` | Keyboard backlight (0x80=off, 0x83=high) |
-| `0xEF` | `0x64`/`0x50`/`0xBC` | Battery charge limit (100%/80%/60%) — non-linear encoding |
+| `0xEF` | bit 7 + % (`0xBC`=60 %, `0xD0`=80 %), bit 7 clear (`0x64`) = no limit | Battery charge limit — msi-ec encoding, `0x80 \| percent` |
 | `0xF2` | `0xC0`/`0xC1`/`0xC2` | Shift mode (Turbo/Comfort/Eco) |
 | `0x6A–0x6F` | temps °C | CPU fan curve temp thresholds (6 breakpoints) |
 | `0x72–0x77` | speed % | CPU fan curve speed targets (6 breakpoints) |

@@ -3,8 +3,8 @@
 //
 // Minimal IOService attached to the EC ACPI device (PNP0C09).
 //   - exposes the UserClient endpoint (IOUserClientClass key in Info.plist)
-//   - serves kMSIECReadRegistersFunction to SMCMSIFan, so both kexts go
-//     through the same EC bus lock
+//   - serves kMSIECReadRegistersFunction and kMSIECSetBatteryChargeFunction
+//     to SMCMSIFan, so both kexts go through the same EC bus lock
 // EC access itself lives in MSIECCore (MSIECToolbox.cpp).
 // ---------------------------------------------------------------------------
 
