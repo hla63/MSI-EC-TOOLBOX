@@ -110,7 +110,8 @@ Boot (OpenCore)
     └─ SMCMSIFan.kext (IOService on IOResources)
          registerHandler → SubmitPlugin → 1s IOTimerEventSource on its own workloop
          refreshSensors() → MSIECToolboxDriver::callPlatformFunction → cache
-         readAccess() returns the cache: F0Ac, F0Mn, F0Mx, FNum, TG0P
+         readAccess() returns the cache: F0Ac, F0ID, F0Md, F0Mn, F0Mx, FNum, TG0P
+         (F0Md read-only: 1 while Cooler Boost forces the fan; F0ID names it "CPU")
          (TC0P is left to SMCProcessor — never publish a key another plugin owns)
 
 Login
