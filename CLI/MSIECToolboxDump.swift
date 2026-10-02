@@ -115,7 +115,7 @@ let knownRegisters: [Int: (name: String, desc: String)] = [
     0xCC: ("CPU_RPM_HI",    "Fan CPU RPM octet haut (big-endian, formule ISW)"),
     0xCD: ("CPU_RPM_LO",    "Fan CPU RPM octet bas"),
     // Profil de performance
-    0xEF: ("BAT_CHARGE",    "Seuil arrêt charge — 0x64=100% 0xBC=60% 0x50=80%"),
+    0xEF: ("BAT_CHARGE",    "Seuil arrêt charge — bit 7=limite active + %: 0xBC=60% 0xD0=80%, bit 7 à 0 (0x64)=100%"),
     0xF2: ("SHIFT_MODE",    "Shift mode — 0xC0=turbo 0xC1=confort 0xC2=éco"),
     0xF4: ("FAN_MODE",      "Fan mode — 0x0D=auto 0x1D=silent 0x8D=advanced"),
 ]

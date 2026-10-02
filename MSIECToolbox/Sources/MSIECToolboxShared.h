@@ -88,20 +88,18 @@ static constexpr uint32_t kMSI_EC_FAN_GPU_TEMP_BASE = 0x82;
 static constexpr uint32_t kMSI_EC_FAN_GPU_SPD_BASE  = 0x8A;
 
 // ---------------------------------------------------------------------------
-// Battery charge stop threshold (EC 0xEF, confirmed by dump on 1551EMS1)
+// Battery charge stop threshold (EC 0xEF)
 //
-// Known encodings:
-//   0x64 (100) = full charge (firmware default)
-//   0x50  (80) = 80% stop
-//   0xBC (188) = 60% stop ("Super Battery" mode in MSI Center)
-//
-// WARNING: the encoding is non-linear. Confirm each new value with an EC
-// dump before exposing it in the UI.
+// Same encoding as the Linux msi-ec driver for CONF_G1_5 (1551EMS1):
+//   bit 7 set   = limit enabled, bits 0-6 = stop percentage (10-100)
+//                 0xBC = 60% ("Super Battery" in MSI Center, confirmed by dump)
+//                 0xD0 = 80%
+//   bit 7 clear = no limit, full charge (firmware default 0x64)
 // ---------------------------------------------------------------------------
-static constexpr uint32_t kMSI_EC_BATTERY_CHARGE_ADDR  = 0xEF;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_100   = 0x64;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_80    = 0x50;
-static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_60    = 0xBC;  // confirmed by dump
+static constexpr uint32_t kMSI_EC_BATTERY_CHARGE_ADDR    = 0xEF;
+static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_ENABLE   = 0x80;
+static constexpr uint8_t  kMSI_EC_BATTERY_LIMIT_MASK     = 0x7F;
+static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_FULL    = 0x64;  // no limit (firmware default)
 
 // ---------------------------------------------------------------------------
 // Keyboard backlight (EC 0xF3, confirmed by msi-ec Linux driver CONF_G1_5)
@@ -267,7 +265,7 @@ enum : uint8_t {
 };
 
 struct MSIBatteryChargeState {
-    uint8_t percent;    // 80 or 100
+    uint8_t percent;    // set: 60, 80 or 100; get: 10-100
     uint8_t reserved[3];
 } __attribute__((packed));
 

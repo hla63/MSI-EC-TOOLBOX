@@ -177,7 +177,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0xCC–0xCD` | big-endian | CPU fan RPM (ISW formula: `RPM = ((325 - val) * 16) + 1480`) |
 | `0xCA–0xCB` | big-endian | Second ("GPU") fan RPM, same formula — the A10M has **two fans** despite having no discrete GPU (confirmed by MSI Creator Center and HWiNFO) |
 | `0xF3` | `0x80–0x83` | Keyboard backlight (0x80=off, 0x83=high) |
-| `0xEF` | `0x64`/`0x50`/`0xBC` | Battery charge limit (100%/80%/60%) — non-linear encoding |
+| `0xEF` | bit 7 + % (`0xBC`=60 %, `0xD0`=80 %), bit 7 clear (`0x64`) = no limit | Battery charge limit — msi-ec encoding, `0x80 \| percent` |
 | `0xF2` | `0xC0`/`0xC1`/`0xC2` | Shift mode (Turbo/Comfort/Eco) |
 | `0x6A–0x6F` | temps °C | CPU fan curve temp thresholds (6 breakpoints) |
 | `0x72–0x77` | speed % | CPU fan curve speed targets (6 breakpoints) |

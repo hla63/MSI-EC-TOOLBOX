@@ -215,13 +215,13 @@ Curve of the second fan. Its effect has not been validated yet: do not write it 
 
 ### Battery Charge (0xEF)
 
+Same encoding as the Linux [msi-ec](https://github.com/BeardOverflow/msi-ec) driver for `CONF_G1_5`: bit 7 enables the limit, bits 0–6 hold the stop percentage.
+
 | Value | Behavior |
 |---|---|
-| `0x64` (100) | Fully charged (default) |
-| `0xBC` (188) | Stop at 60% — MSI Center Super Battery mode (confirmed by dump) |
-| `0x50` (80)  | Stop at 80% — to be validated by dump before use |
-
-> Non-linear encoding — validate each threshold with an EC dump before displaying in the UI.
+| `0x64` (bit 7 clear) | No limit, full charge (firmware default) |
+| `0xD0` (`0x80 \| 80`) | Stop at 80% — set by the menu item |
+| `0xBC` (`0x80 \| 60`) | Stop at 60% — MSI Center Super Battery mode (confirmed by dump) |
 
 ---
 
