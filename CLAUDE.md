@@ -55,7 +55,7 @@ swiftc MSIECToolboxAgent.swift \
   -o MSIECToolboxAgent \
   -framework Foundation -framework AppKit \
   -framework CoreAudio -framework IOKit \
-  -framework CoreGraphics -framework UserNotifications \
+  -framework CoreGraphics \
   -O
 
 # Or compile + sign + register with SMAppService (preferred).
@@ -66,6 +66,18 @@ SIGN_IDENTITY="<codesign identity>" ./build_and_install.sh   # stable signature 
 ```
 
 The script builds in a private `mktemp -d` directory, signs the agent and the installer bundle with the hardened runtime (as the user, before the sudo copy; the agent with `agent.entitlements`, whose `com.apple.security.device.audio-input` is required — without it the hardened runtime hides Core Audio input devices and the mic mute key, its OSD and the mic LED sync silently stop working), installs the agent root-owned in `/Library/Application Support/MSIECToolbox/` and the bundle in `/Applications/MSIECToolbox.app`. The LaunchAgent plist has no StandardOut/ErrorPath: logs are in the unified log (`log stream --predicate 'process == "MSIECToolboxAgent"'`).
+
+#### Install / rebuild checklist (user side)
+
+The kexts and the agent are independent: rebuilding the agent never needs a reboot, rebuilding a kext does (OpenCore `EFI/OC/Kexts` + `config.plist`, see load order below). The agent needs MSIECToolbox.kext loaded to find `MSIECToolboxDriver`; without it the menu bar shows but every EC action fails.
+
+1. **Execute permission**: the script is tracked as `100755`. If it was lost (ZIP download, copy from a FAT/exFAT volume, `git config core.fileMode false`), `./build_and_install.sh` fails with `permission denied`: run `chmod +x LaunchAgent/build_and_install.sh` (or `bash build_and_install.sh`). It must be run from a Mac with the Xcode command line tools (`swiftc`, `codesign`), as the normal user, never with `sudo`.
+2. **Signing identity**: without `SIGN_IDENTITY` the signature is ad-hoc (`-`) and changes on every build. To keep Accessibility across rebuilds, create once a self-signed certificate (Keychain Access › Certificate Assistant › Create a Certificate…, identity type *Self-Signed Root*, certificate type *Code Signing*) and always pass the same name: `SIGN_IDENTITY="MSIECToolbox Local" ./build_and_install.sh`. The script checks the identity with `security find-identity -p codesigning` before compiling and stops if it is missing.
+3. **Login item approval**: if the installer prints `En attente approbation`, enable MSIECToolbox in System Settings › General › Login Items (the installer opens that pane). The script only unregisters/re-registers through SMAppService when the agent's SHA-256 changed (`/Library/Application Support/MSIECToolbox/.agent_checksum`), to avoid a repeated "Background Items" notification.
+4. **Accessibility after a rebuild**: the TCC entry is bound to the code signature (the designated requirement). After an ad-hoc rebuild — or any change of identity — the toggle for `MSIECToolboxAgent` still looks enabled but no longer matches the binary: `AXIsProcessTrusted()` returns false, the Fn keys do nothing, and the menu shows the Accessibility warning. Toggling it off and on is not enough. Fix: System Settings › Privacy & Security › Accessibility, select `MSIECToolboxAgent`, remove it with **−**, then **+**, `Cmd+Shift+G`, `/Library/Application Support/MSIECToolbox/MSIECToolboxAgent`, enable it. No restart is needed: the agent re-checks every 10 s and installs the key tap as soon as it is trusted. With a stable `SIGN_IDENTITY` this step is only needed once.
+5. **Check**: `log stream --predicate 'process == "MSIECToolboxAgent"'` should show `Accessibilité accordée — installation du tap`; `"/Applications/MSIECToolbox.app/Contents/MacOS/MSIECToolboxInstaller" status` should print `✅ Agent actif`.
+
+Claude cannot compile or run any of this in a Linux cloud session (no `swiftc`, no Xcode, no macOS frameworks): Swift and kext changes are only checked by reading, and the user validates them by running the script and rebooting for kexts.
 
 ### CLI Dump Tool
 
