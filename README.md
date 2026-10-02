@@ -177,9 +177,9 @@ Source: msi-ec BeardOverflow + personal EC RW-Everything dump.
 | `0x68` | CPU Temp (°C direct) | |
 | `0x71` | CPU Fan Speed (%, 0–150) | 0 = fan off (< 50°C) |
 | `0x80` | GPU Temperature (°C direct) | 0 if iGPU inactive |
-| `0x89` | GPU fan speed (%) | Residual value on A10M (iGPU only), unreliable |
+| `0x89` | GPU fan speed (%) | Second fan (the A10M has two fans) |
 | `0xCC–0xCD` | CPU fan RPM (big-endian) | ISW formula below |
-| `0xCA–0xCB` | GPU fan RPM (big-endian) | 0 on A10M |
+| `0xCA–0xCB` | GPU fan RPM (big-endian) | Second fan, same ISW formula |
 
 **RPM Formula (ISW)** :
 ```
@@ -205,7 +205,7 @@ Atomic write required: all 13 registers or none.
 
 ### GPU fan curve (0x82–0x90)
 
-Present in the EC but with no measurable effect on A10M (iGPU only, 1 physical fan).
+Curve of the second fan. Its effect has not been validated yet: do not write it without an EC dump.
 
 | Registers | Firmware values |
 |---|---|
@@ -285,7 +285,7 @@ Boot OpenCore
          └─ pluginStart() → hook IOACPIPlatformDevice::writeECField
          └─ MSIECToolboxDriver (IOService) published → UserClient available
      └─ SMCMSIFan.kext loaded (VirtualSMC plugin)
-         └─ F0Ac / F0ID / F0Md / F0Mn / F0Mx / FNum / TG0P published in VirtualSMC (TC0P comes from SMCProcessor)
+         └─ F0xx (CPU fan) / F1xx (GPU fan) / FNum=2 / TG0P published in VirtualSMC (TC0P comes from SMCProcessor)
          └─ EC sampled every 1s through MSIECToolboxDriver (shared EC lock), SMC reads return the cache
 
 Login

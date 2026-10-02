@@ -60,10 +60,10 @@ static constexpr uint32_t kMSI_EC_FAN_CPU_SPD_BASE  = 0x72;  // 6 registers + 0x
 static constexpr uint8_t  kMSI_EC_FAN_CURVE_POINTS  = 6;     // editable breakpoints
 
 // ---------------------------------------------------------------------------
-// GPU fan curve breakpoints (present in EC on A10M but effect unconfirmed)
-// The A10M has a single physical fan (iGPU only). EC register 0x89 returned
-// 0x2D (45%) in dumps while 0x71 (CPU fan %) was 0 — likely a firmware
-// residual or mirror value. Do not write these registers without validation.
+// GPU fan curve breakpoints (second fan; effect of this curve unconfirmed)
+// The A10M has two fans even without a discrete GPU: fan 1 "CPU" (0xCC-0xCD)
+// and fan 2 "GPU" (0xCA-0xCB), both reported with independent RPM by MSI
+// Creator Center and HWiNFO. Do not write these registers without validation.
 // ---------------------------------------------------------------------------
 
 static constexpr uint32_t kMSI_EC_FAN_GPU_TEMP0 = 0x82;  // default: 50°C
@@ -131,8 +131,8 @@ static constexpr uint32_t kMSI_EC_GPU_TEMP_ADDR     = 0x80;  // direct °C
 
 // Real-time fan speed % (read-only, range 0-150)
 static constexpr uint32_t kMSI_EC_CPU_FAN_PCT_ADDR  = 0x71;
-// NOTE: on A10M (iGPU only), 0x89 returned 0x2D (45%) in dumps while 0x71
-// was 0 (fan stopped). Likely a firmware residual — treat as unreliable.
+// Second ("GPU") fan. Dumps showed 0x2D (45%) while 0x71 was 0: the two fans
+// follow different curves.
 static constexpr uint32_t kMSI_EC_GPU_FAN_PCT_ADDR  = 0x89;
 
 // Fan mode logical values (independent of raw EC bytes)
@@ -249,7 +249,7 @@ struct MSISystemState {
     uint8_t cpuTempC;     // °C
     uint8_t gpuTempC;     // °C (iGPU only on A10M)
     uint8_t cpuFanPct;    // %, range 0-150
-    uint8_t gpuFanPct;    // %, always 0 on A10M (no dedicated GPU fan)
+    uint8_t gpuFanPct;    // %, second ("GPU") fan
     uint8_t fanMode;      // MSIFanModeValue
     uint8_t shiftMode;    // MSIShiftModeValue
     uint8_t coolerBoost;  // 0 or 1

@@ -110,8 +110,9 @@ Boot (OpenCore)
     └─ SMCMSIFan.kext (IOService on IOResources)
          registerHandler → SubmitPlugin → 1s IOTimerEventSource on its own workloop
          refreshSensors() → MSIECToolboxDriver::callPlatformFunction → cache
-         readAccess() returns the cache: F0Ac, F0ID, F0Md, F0Mn, F0Mx, FNum, TG0P
-         (F0Md read-only: 1 while Cooler Boost forces the fan; F0ID names it "CPU")
+         readAccess() returns the cache: F0Ac/ID/Md/Mn/Mx (fan "CPU", EC 0xCC-0xCD),
+         F1Ac/ID/Md/Mn/Mx (fan "GPU", EC 0xCA-0xCB), FNum = 2, TG0P
+         (FxMd read-only: 1 while Cooler Boost forces the fans)
          (TC0P is left to SMCProcessor — never publish a key another plugin owns)
 
 Login
@@ -174,6 +175,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0x68` | direct °C | CPU temp |
 | `0x71` | 0–150% | CPU fan speed % |
 | `0xCC–0xCD` | big-endian | CPU fan RPM (ISW formula: `RPM = ((325 - val) * 16) + 1480`) |
+| `0xCA–0xCB` | big-endian | Second ("GPU") fan RPM, same formula — the A10M has **two fans** despite having no discrete GPU (confirmed by MSI Creator Center and HWiNFO) |
 | `0xF3` | `0x80–0x83` | Keyboard backlight (0x80=off, 0x83=high) |
 | `0xEF` | `0x64`/`0x50`/`0xBC` | Battery charge limit (100%/80%/60%) — non-linear encoding |
 | `0xF2` | `0xC0`/`0xC1`/`0xC2` | Shift mode (Turbo/Comfort/Eco) |
