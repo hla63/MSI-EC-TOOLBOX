@@ -535,6 +535,9 @@ final class MenuBarController {
     private var kbBacklightLowItem:  NSMenuItem!
     private var kbBacklightMedItem:  NSMenuItem!
     private var kbBacklightHighItem: NSMenuItem!
+    // Accessibilité (CGEventTap)
+    private var accessibilityItem:     NSMenuItem!
+    private var sepAfterAccessibility: NSMenuItem!
 
     // ── Préférences — icône barre de menus ───────────────────────────────────
     // "led" (défaut) = LEDs colorées dynamiques
@@ -663,6 +666,20 @@ final class MenuBarController {
 
         // ── Batterie ──────────────────────────────────────────────────────────
         batteryLimitItem = makeItem(title: "Charge : 100%", sfSymbol: "battery.100", action: #selector(tapBatteryLimit))
+
+        // ── Avertissement Accessibilité (masqué tant que le tap fonctionne) ──
+        accessibilityItem = NSMenuItem(title: "Touches Fn inactives — autoriser dans Accessibilité…",
+                                       action: #selector(tapAccessibilityWarning), keyEquivalent: "")
+        accessibilityItem.target = self
+        accessibilityItem.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                                          accessibilityDescription: nil)
+        accessibilityItem.toolTip = "Retirer MSIECToolboxAgent de la liste (−) puis le ré-ajouter (+) : "
+                                  + "après une réinstallation, cocher la case ne suffit pas."
+        accessibilityItem.isHidden = true
+        sepAfterAccessibility = NSMenuItem.separator()
+        sepAfterAccessibility.isHidden = true
+        menu.addItem(accessibilityItem)
+        menu.addItem(sepAfterAccessibility)
 
         // ── Assemblage du menu ───────────────────────────────────────────────
         audioItems = [micItem, speakerItem, camItem]
@@ -1071,6 +1088,21 @@ final class MenuBarController {
 
     @objc private func tapECDump() { onRequestECDump?() }
 
+    // ── Accessibilité ─────────────────────────────────────────────────────────
+
+    /// Shown while the Fn keys cannot be intercepted (Accessibility not
+    /// granted, or granted to a previous signature of the agent).
+    func setAccessibilityWarning(_ visible: Bool) {
+        guard accessibilityItem.isHidden == visible else { return }
+        accessibilityItem.isHidden     = !visible
+        sepAfterAccessibility.isHidden = !visible
+    }
+
+    @objc private func tapAccessibilityWarning() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func tapPreferences() { onRequestPreferences?() }
     @objc private func tapQuit()     {
         NSLog("[MSIECToolboxAgent] Quitter depuis la barre de menu")
@@ -1278,6 +1310,8 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         pollTimer?.cancel()
         fanTimer?.cancel()
         accessibilityRetryTimer?.cancel()
+        tapWatchdogTimer?.cancel()
+        if let obs = screenObserver { NotificationCenter.default.removeObserver(obs) }
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = eventTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes); eventTapSource = nil }
         client.stopWatching()
@@ -1295,6 +1329,7 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             accessibilityNotificationSent = true
             postAccessibilityNotification()
         }
+        menuBar.setAccessibilityWarning(true)
         scheduleAccessibilityRetry()
     }
 
@@ -1315,11 +1350,15 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
             options:          .defaultTap,
             eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
             callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
-                // macOS désactive le tap lors de Secure Input (dialogs auth)
-                // On le réactive dès que possible
+                // macOS disables the tap on Secure Input (auth dialogs) or when
+                // the main run loop was too slow to answer (e.g. during a
+                // display reconfiguration). This notification only arrives
+                // with the next event, which is lost to us: the watchdog and
+                // the screen-change observer re-enable the tap earlier.
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     let me = Unmanaged<MuteObserver>.fromOpaque(userInfo!).takeUnretainedValue()
-                    if let tap = me.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+                    me.reenableTapIfNeeded(reason: type == .tapDisabledByTimeout
+                                           ? "timeout" : "saisie sécurisée")
                     return nil
                 }
                 // passUnretained : le callback ne possède pas l'événement —
@@ -1330,19 +1369,19 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
                 let me = Unmanaged<MuteObserver>.fromOpaque(userInfo!).takeUnretainedValue()
                 switch CGKeyCode(keyCode) {
                 case kF14KeyCode:
-                    NSLog("[MSIECToolboxAgent] F14 intercepté → toggle mic mute")
+                    NSLog("[MSIECToolboxAgent] F5 (keycode 79) intercepté → toggle mic mute")
                     me.toggleMicMute()
                     return nil
                 case kF13KeyCode:
-                    NSLog("[MSIECToolboxAgent] F13 intercepté → toggle rotation écran")
+                    NSLog("[MSIECToolboxAgent] F12 (keycode 111) intercepté → toggle rotation écran")
                     me.toggleDisplayRotation()
                     return nil
                 case kF6KeyCode:
-                    NSLog("[MSIECToolboxAgent] F6 intercepté → toggle caméra")
+                    NSLog("[MSIECToolboxAgent] F6 (keycode 118) intercepté → toggle caméra")
                     me.toggleCameraState()
                     return nil
                 case kF8KeyCode:
-                    NSLog("[MSIECToolboxAgent] F8 intercepté → toggle rétroéclairage clavier")
+                    NSLog("[MSIECToolboxAgent] F8 (keycode 100) intercepté → toggle rétroéclairage clavier")
                     me.toggleKbBacklight()
                     return nil
                 default:
@@ -1360,15 +1399,54 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
         CGEvent.tapEnable(tap: tap, enable: true)
         eventTap = tap
         eventTapSource = source
+        menuBar.setAccessibilityWarning(false)
+        startTapWatchdog()
         NSLog("[MSIECToolboxAgent] CGEventTap installé — F5(79) + F6(118) + F8(100) + F12(111)")
+    }
+
+    // ── Tap watchdog ─────────────────────────────────────────────────────────
+    //
+    // A disabled tap lets the next Fn key through unhandled. Rotating to
+    // 90°/270° is the heaviest display reconfiguration and makes the tap time
+    // out, so the first F12 press after it was swallowed (holding the key
+    // only worked thanks to auto-repeat). Re-enable as soon as the screen
+    // configuration changes, and poll every 2 s as a safety net. The same
+    // timer notices a permission revoked or invalidated by a new signature.
+
+    private var tapWatchdogTimer: DispatchSourceTimer?
+    private var screenObserver: NSObjectProtocol?
+
+    fileprivate func reenableTapIfNeeded(reason: String) {
+        guard let tap = eventTap, !CGEvent.tapIsEnabled(tap: tap) else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        NSLog("[MSIECToolboxAgent] CGEventTap réactivé (%@)", reason)
+    }
+
+    private func startTapWatchdog() {
+        guard tapWatchdogTimer == nil else { return }
+
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                self?.reenableTapIfNeeded(reason: "changement d'écran")
+            }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.reenableTapIfNeeded(reason: "watchdog")
+            self.menuBar.setAccessibilityWarning(!AXIsProcessTrusted())
+        }
+        timer.resume()
+        tapWatchdogTimer = timer
     }
 
     // ── Notification Accessibilité ───────────────────────────────────────────
 
     private func postAccessibilityNotification() {
-        // Log uniquement — pas d'ouverture automatique de Réglages Système.
-        // Si le tap clavier est requis, accorder manuellement :
-        // Réglages Système › Confidentialité › Accessibilité › MSIECToolboxAgent
+        // Log + avertissement dans le menu (setAccessibilityWarning) — pas
+        // d'ouverture automatique de Réglages Système.
         NSLog("[MSIECToolboxAgent] ⚠️  Accessibilité non accordée — tap clavier désactivé")
         NSLog("[MSIECToolboxAgent]    Pour activer les touches Fn : Réglages Système > Confidentialité > Accessibilité")
     }
@@ -1377,17 +1455,15 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
     private var accessibilityRetryTimer: DispatchSourceTimer?
 
     private func scheduleAccessibilityRetry() {
+        guard accessibilityRetryTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 10, repeating: 10, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            if AXIsProcessTrusted() {
-                NSLog("[MSIECToolboxAgent] ✅ Accessibilité accordée — installation du tap")
-                self.accessibilityRetryTimer?.cancel()
-                self.accessibilityRetryTimer = nil
-                self.installKeyEventTap()
-            } else {
-            }
+            guard let self = self, AXIsProcessTrusted() else { return }
+            NSLog("[MSIECToolboxAgent] ✅ Accessibilité accordée — installation du tap")
+            self.accessibilityRetryTimer?.cancel()
+            self.accessibilityRetryTimer = nil
+            self.installKeyEventTap()
         }
         timer.resume()
         accessibilityRetryTimer = timer
@@ -1397,7 +1473,10 @@ final class MuteObserver: NSObject, NSApplicationDelegate {
 
     private func toggleMicMute() {
         let deviceID = defaultInputDevice()
-        guard deviceID != kAudioObjectUnknown else { return }
+        guard deviceID != kAudioObjectUnknown else {
+            NSLog("[MSIECToolboxAgent] toggleMicMute : aucun périphérique d'entrée (entitlement audio-input / autorisation Micro ?)")
+            return
+        }
         let current = readMute(deviceID: deviceID, input: true)
         let newMuted = !current
         setAudioMute(deviceID: deviceID, input: true, muted: newMuted)
