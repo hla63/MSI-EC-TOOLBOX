@@ -369,7 +369,7 @@ if let offset = args.offset {
                 : colored("OFF", ansiGreen + ansiBold)) + "\n")
         } else if offset == 0xBF {
             print(" Fn/Win : " + ((val & 0x10) != 0
-                ? colored("INVERSÉES — le kext 5.5.0+ les remet en place au démarrage de macOS", ansiYellow + ansiBold)
+                ? colored("INVERSÉES — le kext 1.2.0+ les remet en place au démarrage de macOS", ansiYellow + ansiBold)
                 : colored("normales", ansiGreen + ansiBold)) + "\n")
         }
     }

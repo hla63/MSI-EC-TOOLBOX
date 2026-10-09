@@ -200,7 +200,7 @@
 				ARCHS = x86_64;
 				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
 				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
-				MODULE_VERSION = 5.5.1;
+				MODULE_VERSION = 1.2.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 			};
@@ -232,7 +232,7 @@
 				ARCHS = x86_64;
 				KERNEL_EXTENSION_HEADER_SEARCH_PATHS = "$(SRCROOT)/../MacKernelSDK/Headers";
 				KERNEL_FRAMEWORK_HEADERS = "$(SRCROOT)/../MacKernelSDK/Headers";
-				MODULE_VERSION = 5.5.1;
+				MODULE_VERSION = 1.2.0;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				VALIDATE_PRODUCT = YES;
