@@ -103,6 +103,18 @@ static constexpr uint8_t  kMSI_EC_BATTERY_CHARGE_FULL    = 0x64;  // no limit (f
 static constexpr uint8_t  kMSIBatteryLimitMinPct         = 10;    // msi-ec range: 10-100
 
 // ---------------------------------------------------------------------------
+// Fn / Windows key swap (EC 0xBF, bit 4 — msi-ec CONF_G1_5 fn_win_swap)
+//
+// Set by MSI Creator Center on Windows. It survives a reboot and the EC
+// applies it under any OS: on macOS the Win key (Command) becomes Fn and
+// Command is lost. MSIECToolboxDriver clears it at start and puts it back
+// at shutdown/restart (confirmed on 1551EMS1.107: 0x10 after a reboot).
+// Always read-modify-write: the other bits are unknown.
+// ---------------------------------------------------------------------------
+static constexpr uint32_t kMSI_EC_FN_WIN_SWAP_ADDR = 0xBF;
+static constexpr uint8_t  kMSI_EC_FN_WIN_SWAP_MASK = 0x10;  // bit 4
+
+// ---------------------------------------------------------------------------
 // Keyboard backlight (EC 0xF3, confirmed by msi-ec Linux driver CONF_G1_5)
 //
 // Simple write — no read-modify-write needed.

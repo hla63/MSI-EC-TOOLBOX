@@ -115,7 +115,7 @@ let knownRegisters: [Int: (name: String, desc: String)] = [
     0xCC: ("CPU_RPM_HI",    "Fan CPU RPM octet haut (big-endian, formule ISW)"),
     0xCD: ("CPU_RPM_LO",    "Fan CPU RPM octet bas"),
     // Clavier — réglé par MSI Creator Center sous Windows, stocké dans l'EC
-    0xBF: ("FN_WIN_SWAP",   "Inversion Fn/Windows — bit 4 (0x10) à 1 = touches inversées (réglage Creator Center)"),
+    0xBF: ("FN_WIN_SWAP",   "Inversion Fn/Windows — bit 4 (0x10) à 1 = touches inversées (Creator Center, remis à 0 par le kext sous macOS)"),
     // Profil de performance
     0xEF: ("BAT_CHARGE",    "Seuil arrêt charge — bit 7=limite active + %: 0xBC=60% 0xD0=80%, bit 7 à 0 (0x64)=100%"),
     0xF2: ("SHIFT_MODE",    "Shift mode — 0xC0=turbo 0xC1=confort 0xC2=éco"),
@@ -369,7 +369,7 @@ if let offset = args.offset {
                 : colored("OFF", ansiGreen + ansiBold)) + "\n")
         } else if offset == 0xBF {
             print(" Fn/Win : " + ((val & 0x10) != 0
-                ? colored("INVERSÉES — désactiver dans MSI Creator Center (Windows)", ansiYellow + ansiBold)
+                ? colored("INVERSÉES — le kext 5.5.0+ les remet en place au démarrage de macOS", ansiYellow + ansiBold)
                 : colored("normales", ansiGreen + ansiBold)) + "\n")
         }
     }

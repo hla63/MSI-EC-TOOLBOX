@@ -15,9 +15,11 @@
 #ifdef DEBUG
 #define MSIEC_LOG(fmt, ...)  IOLog("MSIECToolbox: " fmt "\n", ##__VA_ARGS__)
 #define MSIEC_ERR(fmt, ...)  IOLog("MSIECToolbox [ERR]: " fmt "\n", ##__VA_ARGS__)
+#define MSIEC_INFO(fmt, ...) IOLog("MSIECToolbox: " fmt "\n", ##__VA_ARGS__)
 #else
 #define MSIEC_LOG(fmt, ...)  do {} while(0)
 #define MSIEC_ERR(fmt, ...)  IOLog("MSIECToolbox [ERR]: " fmt "\n", ##__VA_ARGS__)
+#define MSIEC_INFO(fmt, ...) IOLog("MSIECToolbox: " fmt "\n", ##__VA_ARGS__)  // rare, always on
 #endif
 
 // EC logic shared by the Lilu hook, the UserClient and SMCMSIFan.
@@ -53,6 +55,11 @@ public:
 
     static IOReturn setBatteryCharge(uint8_t percent);  // 10-100, 100 = no limit
     static IOReturn getBatteryCharge(uint8_t &outPercent);
+
+    // --- Fn / Win key swap (EC 0xBF bit 4) -----------------------------------
+
+    // Read-modify-write under one BusGuard; outWasSwapped gets the previous state.
+    static IOReturn setFnWinSwap(bool swapped, bool *outWasSwapped = nullptr);
 
     // --- Touchpad (relayed to the touchpad drivers, not the EC) -------------
 
