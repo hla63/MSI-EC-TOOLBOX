@@ -226,7 +226,16 @@ RPM = ((325 - val) * 16) + 1480
 | `0x2C` | base `0xE0`, bit `0x04` = LED on | Speaker mute LED |
 | `0x2E` | `0x4B`=on / `0x49`=off | Webcam |
 
-The LED bits are always written with a read-modify-write.
+The LED bits are always written with a read-modify-write. On Windows, these LEDs only light up when MSI Creator Center is installed: the firmware does not drive them itself, the application writes the bit. On macOS the agent does the same.
+
+### Fn / Windows key swap (0xBF)
+
+| Register | Values | Description |
+|---|---|---|
+| `0xBF` bit 4 | `0x10` set = swapped | Fn and Windows keys swapped by the EC (MSI Creator Center option) |
+
+The project never writes this bit, but the setting is stored in the EC and persists across reboots and operating systems: if it is enabled in Creator Center on Windows, the keys are also swapped on macOS. Check it with `sudo MSIECToolboxDump --offset 0xBF`, and turn it off from Creator Center.
+
 ### CPU Fan Curve — Advanced Mode (0x6A–0x78)
 
 The curve is active only if `0xF4 = 0x8D` (advanced mode).
