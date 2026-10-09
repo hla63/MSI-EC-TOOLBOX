@@ -27,19 +27,29 @@ bool MSIECToolboxDriver::start(IOService *provider) {
     // key (Command) into Fn on macOS. Clear it for macOS and give it back to
     // Windows at shutdown/restart. Not restored after a panic or a forced
     // power-off: Windows then keeps the keys unswapped until it is set again.
+    // The outcome is also published as the "FnWinSwap" property
+    // (ioreg -l | grep FnWinSwap): early boot kernel log lines are often lost.
+    const char *swapState;
     bool wasSwapped = false;
     IOReturn swapRet = MSIECCore::setFnWinSwap(false, &wasSwapped);
     if (swapRet != kIOReturnSuccess) {
         MSIEC_ERR("Fn/Win swap: EC 0xBF not accessible (0x%08X)", swapRet);
-    } else if (wasSwapped) {
+        swapState = "EC 0xBF not accessible";
+    } else if (!wasSwapped) {
+        swapState = "not set at boot";
+    } else {
         restoreFnWinSwap = true;
         // Priority interest: the clients IOPMrootDomain notifies before a halt or restart.
         haltNotifier = registerPrioritySleepWakeInterest(haltRestartHandler, this);
-        if (haltNotifier)
+        if (haltNotifier) {
             MSIEC_INFO("Fn/Win swap cleared for macOS, restored at shutdown/restart");
-        else
+            swapState = "cleared at boot, restored at shutdown/restart";
+        } else {
             MSIEC_ERR("Fn/Win swap cleared, but restore at shutdown is unavailable");
+            swapState = "cleared at boot, restore unavailable";
+        }
     }
+    setProperty("FnWinSwap", swapState);
 
     MSIEC_LOG("MSIECToolboxDriver started, provider=%s", provider->getName());
     registerService();
