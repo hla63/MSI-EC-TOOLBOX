@@ -24,7 +24,8 @@ bool MSIECToolboxDriver::start(IOService *provider) {
     MSIECCore::setECDevice(OSDynamicCast(IOACPIPlatformDevice, provider));
 
     // MSI Creator Center's Fn/Win swap survives a reboot and turns the Win
-    // key (Command) into Fn on macOS. Clear it for macOS and give it back to
+    // key into Fn on macOS (losing Command on the author's setup, where Win
+    // is mapped to Command). Clear it for macOS and give it back to
     // Windows at shutdown/restart. Not restored after a panic or a forced
     // power-off: Windows then keeps the keys unswapped until it is set again.
     // The outcome is also published as the "FnWinSwap" property

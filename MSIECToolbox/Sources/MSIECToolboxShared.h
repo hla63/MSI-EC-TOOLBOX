@@ -106,8 +106,9 @@ static constexpr uint8_t  kMSIBatteryLimitMinPct         = 10;    // msi-ec rang
 // Fn / Windows key swap (EC 0xBF, bit 4 — msi-ec CONF_G1_5 fn_win_swap)
 //
 // Set by MSI Creator Center on Windows. It survives a reboot and the EC
-// applies it under any OS: on macOS the Win key (Command) becomes Fn and
-// Command is lost. MSIECToolboxDriver clears it at start and puts it back
+// applies it under any OS: on macOS the Win key becomes Fn and is lost
+// (Command on the author's setup; it depends on the modifier mapping).
+// MSIECToolboxDriver clears it at start and puts it back
 // at shutdown/restart (confirmed on 1551EMS1.107: 0x10 after a reboot).
 // Always read-modify-write: the other bits are unknown.
 // ---------------------------------------------------------------------------
