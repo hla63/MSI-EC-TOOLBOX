@@ -182,7 +182,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0xF3` | `0x80–0x83` | Keyboard backlight (0x80=off, 0x83=high) |
 | `0xEF` | bit 7 + % (`0xBC`=60 %, `0xD0`=80 %), bit 7 clear (`0x64`) = no limit | Battery charge limit — msi-ec encoding, `0x80 \| percent` |
 | `0xF2` | `0xC0`/`0xC1`/`0xC2` | Shift mode (Turbo/Comfort/Eco) |
-| `0xBF` bit 4 | `0x10` set = swapped | Fn/Win key swap (Creator Center option, persists in the EC) — read-only for this project, documented in the CLI |
+| `0xBF` bit 4 | `0x10` set = swapped | Fn/Win key swap (Creator Center option; persistence across a reboot not verified) — read-only for this project, documented in the CLI |
 | `0x6A–0x6F` | temps °C | CPU fan curve temp thresholds (6 breakpoints) |
 | `0x72–0x77` | speed % | CPU fan curve speed targets (6 breakpoints) |
 | `0x78` | `0x64` | CPU fan curve fixed point 6 (100%, do not modify) |

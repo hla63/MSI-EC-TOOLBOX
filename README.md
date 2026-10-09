@@ -234,7 +234,7 @@ The LED bits are always written with a read-modify-write. On Windows, these LEDs
 |---|---|---|
 | `0xBF` bit 4 | `0x10` set = swapped | Fn and Windows keys swapped by the EC (MSI Creator Center option) |
 
-The project never writes this bit, but the setting is stored in the EC and persists across reboots and operating systems: if it is enabled in Creator Center on Windows, the keys are also swapped on macOS. Check it with `sudo MSIECToolboxDump --offset 0xBF`, and turn it off from Creator Center.
+The project never writes this bit. Whether the setting survives a reboot into macOS is not verified yet (the charge limit in `0xEF` does): if Fn and Windows look swapped on macOS, check it with `sudo MSIECToolboxDump --offset 0xBF`, and turn it off from Creator Center.
 
 ### CPU Fan Curve — Advanced Mode (0x6A–0x78)
 
