@@ -234,7 +234,7 @@ The LED bits are always written with a read-modify-write. On Windows, these LEDs
 |---|---|---|
 | `0xBF` bit 4 | `0x10` set = swapped | Fn and Windows keys swapped by the EC (MSI Creator Center option) |
 
-The setting survives a reboot and the EC applies it under macOS too: the Windows key (used as Command) becomes Fn, and Command is lost. MSIECToolbox therefore clears the bit when macOS starts and sets it back at shutdown or restart, so Windows keeps the Creator Center choice. The kernel log shows `Fn/Win swap cleared for macOS` and `Fn/Win swap restored for the next OS`.
+The setting survives a reboot and the EC applies it under macOS too: the Windows key (used as Command) becomes Fn, and Command is lost. MSIECToolbox therefore clears the bit when macOS starts and sets it back at shutdown or restart, so Windows keeps the Creator Center choice. On macOS, `sudo MSIECToolboxDump --offset 0xBF` should read `0x00`; on Windows, after a normal restart from macOS, the keys are swapped again.
 
 After a kernel panic or a forced power-off the bit is not restored: re-enable the swap in Creator Center if needed. Check the current state with `sudo MSIECToolboxDump --offset 0xBF`.
 
