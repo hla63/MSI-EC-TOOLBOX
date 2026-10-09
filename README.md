@@ -234,7 +234,7 @@ The LED bits are always written with a read-modify-write. On Windows, these LEDs
 |---|---|---|
 | `0xBF` bit 4 | `0x10` set = swapped | Fn and Windows keys swapped by the EC (MSI Creator Center option) |
 
-The setting survives a reboot and the EC applies it under macOS too: the Windows key (used as Command) becomes Fn, and Command is lost. MSIECToolbox therefore clears the bit when macOS starts and sets it back at shutdown or restart, so Windows keeps the Creator Center choice. On macOS, `sudo MSIECToolboxDump --offset 0xBF` should read `0x00`, and `ioreg -l | grep FnWinSwap` tells what the kext found at boot (`not set at boot`, or `cleared at boot, restored at shutdown/restart`). On Windows, after a normal restart from macOS, the keys are swapped again.
+The setting survives a reboot and the EC applies it under macOS too: the Windows key becomes Fn, and the Windows key itself is no longer seen by macOS. On the author's setup the Windows key is used as Command, so Command is lost; with another modifier mapping (VoodooPS2's "Swap command and option", or System Settings › Keyboard › Modifier Keys) it is whatever that key was mapped to. MSIECToolbox therefore clears the bit when macOS starts and sets it back at shutdown or restart, so Windows keeps the Creator Center choice. On macOS, `sudo MSIECToolboxDump --offset 0xBF` should read `0x00`, and `ioreg -l | grep FnWinSwap` tells what the kext found at boot (`not set at boot`, or `cleared at boot, restored at shutdown/restart`). On Windows, after a normal restart from macOS, the keys are swapped again.
 
 After a kernel panic or a forced power-off the bit is not restored: re-enable the swap in Creator Center if needed. Check the current state with `sudo MSIECToolboxDump --offset 0xBF`.
 
