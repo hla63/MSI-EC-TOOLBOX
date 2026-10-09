@@ -162,7 +162,7 @@ Login
 - The hook runs in ACPI context: atomics only, no `BusGuard`, no mutex, no allocation.
 - `-msiec.off` disables the whole Lilu part (hook included) while the EC driver, UserClient and SMCMSIFan keep working.
 
-**Fn/Win swap (EC 0xBF bit 4)**: `MSIECToolboxDriver::start()` clears it with a read-modify-write (`MSIECCore::setFnWinSwap`) and, only if it was set, registers `registerPrioritySleepWakeInterest` to set it back on `kIOMessageSystemWillPowerOff` / `kIOMessageSystemWillRestart`, so Windows keeps the user's Creator Center choice. Sleep is ignored. Not restored after a panic or a forced power-off. The handler runs synchronously on the PM thread before the halt, ACPI still up, so a `BusGuard` is allowed there.
+**Fn/Win swap (EC 0xBF bit 4)**: `MSIECToolboxDriver::start()` clears it with a read-modify-write (`MSIECCore::setFnWinSwap`) and, only if it was set, registers `registerPrioritySleepWakeInterest` to set it back on `kIOMessageSystemWillPowerOff` / `kIOMessageSystemWillRestart`, so Windows keeps the user's Creator Center choice. Sleep is ignored. Not restored after a panic or a forced power-off. The boot-time outcome is published as the driver property `FnWinSwap` (`ioreg -l | grep FnWinSwap`), because early-boot kernel log lines were not found on the user's machine. The handler runs synchronously on the PM thread before the halt, ACPI still up, so a `BusGuard` is allowed there.
 
 **Mute LEDs**: `setMuteState` always writes the LED bit (0x04 of 0x2B/0x2C) with a read-modify-write, whether or not the hook is installed. The hook only re-applies the bit when firmware rewrites those registers; without the direct write the agent's 500 ms poll would read the old bit and revert the CoreAudio mute.
 
@@ -184,7 +184,7 @@ All registers accessed via ACPI port I/O: command port `0x66`, data port `0x62`.
 | `0xF3` | `0x80–0x83` | Keyboard backlight (0x80=off, 0x83=high) |
 | `0xEF` | bit 7 + % (`0xBC`=60 %, `0xD0`=80 %), bit 7 clear (`0x64`) = no limit | Battery charge limit — msi-ec encoding, `0x80 \| percent` |
 | `0xF2` | `0xC0`/`0xC1`/`0xC2` | Shift mode (Turbo/Comfort/Eco) |
-| `0xBF` bit 4 | `0x10` set = swapped | Fn/Win key swap (Creator Center option). Survives a reboot and applies on macOS (Win/Command becomes Fn) — see "Fn/Win swap" below |
+| `0xBF` bit 4 | `0x10` set = swapped | Fn/Win key swap (Creator Center option). Survives a reboot and applies on macOS (the Win key becomes Fn — Command on the author's setup) — see "Fn/Win swap" below |
 | `0x6A–0x6F` | temps °C | CPU fan curve temp thresholds (6 breakpoints) |
 | `0x72–0x77` | speed % | CPU fan curve speed targets (6 breakpoints) |
 | `0x78` | `0x64` | CPU fan curve fixed point 6 (100%, do not modify) |
