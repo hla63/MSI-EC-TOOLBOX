@@ -226,7 +226,18 @@ RPM = ((325 - val) * 16) + 1480
 | `0x2C` | base `0xE0`, bit `0x04` = LED on | Speaker mute LED |
 | `0x2E` | `0x4B`=on / `0x49`=off | Webcam |
 
-The LED bits are always written with a read-modify-write.
+The LED bits are always written with a read-modify-write. On Windows, these LEDs only light up when MSI Creator Center is installed: the firmware does not drive them itself, the application writes the bit. On macOS the agent does the same.
+
+### Fn / Windows key swap (0xBF)
+
+| Register | Values | Description |
+|---|---|---|
+| `0xBF` bit 4 | `0x10` set = swapped | Fn and Windows keys swapped by the EC (MSI Creator Center option) |
+
+The setting survives a reboot and the EC applies it under macOS too: the Windows key (used as Command) becomes Fn, and Command is lost. MSIECToolbox therefore clears the bit when macOS starts and sets it back at shutdown or restart, so Windows keeps the Creator Center choice. The kernel log shows `Fn/Win swap cleared for macOS` and `Fn/Win swap restored for the next OS`.
+
+After a kernel panic or a forced power-off the bit is not restored: re-enable the swap in Creator Center if needed. Check the current state with `sudo MSIECToolboxDump --offset 0xBF`.
+
 ### CPU Fan Curve — Advanced Mode (0x6A–0x78)
 
 The curve is active only if `0xF4 = 0x8D` (advanced mode).

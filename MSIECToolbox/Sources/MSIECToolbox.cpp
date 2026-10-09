@@ -580,6 +580,29 @@ IOReturn MSIECCore::setCoolerBoost(bool enable) {
 }
 
 // ---------------------------------------------------------------------------
+// setFnWinSwap — Fn / Windows key swap, EC 0xBF bit 4 (read-modify-write)
+// ---------------------------------------------------------------------------
+
+IOReturn MSIECCore::setFnWinSwap(bool swapped, bool *outWasSwapped) {
+    BusGuard bus;
+    if (bus.status() != kIOReturnSuccess) return bus.status();
+
+    uint8_t current = 0;
+    IOReturn ret = ecReadLocked(kMSI_EC_FN_WIN_SWAP_ADDR, current);
+    if (ret != kIOReturnSuccess) return ret;
+
+    bool was = (current & kMSI_EC_FN_WIN_SWAP_MASK) != 0;
+    if (outWasSwapped) *outWasSwapped = was;
+    if (was == swapped) return kIOReturnSuccess;
+
+    uint8_t newVal = swapped
+        ? (current |  kMSI_EC_FN_WIN_SWAP_MASK)
+        : (current & ~kMSI_EC_FN_WIN_SWAP_MASK);
+    MSIEC_LOG("setFnWinSwap: EC[0xBF]: 0x%02X -> 0x%02X", current, newVal);
+    return ecWriteLocked(kMSI_EC_FN_WIN_SWAP_ADDR, newVal);
+}
+
+// ---------------------------------------------------------------------------
 // setShiftMode — CPU+GPU performance profile via EC 0xF2
 //
 // eco     (0xC2): minimum frequencies, lowest power draw
